@@ -1,30 +1,27 @@
 #!/bin/sh
-
 set -e
-jb_root_path=$(realpath $HOME/../..)
+# Rootless branch: HOME cannot identify the jailbreak prefix.
+jb_root_path=/var/jb
 bundle_system=/System/Library/ControlCenter/Bundles/ContinuousExposeModule.bundle
 bundle_jb=$jb_root_path/Library/ControlCenter/Bundles/ContinuousExposeModule.bundle
 plistbuddy=$jb_root_path/usr/libexec/PlistBuddy
-
 case "$1" in
-	(configure)
-	if [ -d $bundle_system ] ; then
-		# Copy Stage Manager CC module
-		ln -sf $bundle_system/* $bundle_jb/
-		rm $bundle_jb/Info.plist
-		cp $bundle_system/Info.plist $bundle_jb/Info.plist
-		$plistbuddy -c "Delete :SBIconVisibilityDefaultVisible" $bundle_jb/Info.plist
-		$plistbuddy -c "Delete :SBIconVisibilitySetByAppPreference" $bundle_jb/Info.plist
-		$plistbuddy -c "Add :UIDeviceFamily:0 integer 1" $bundle_jb/Info.plist
-	fi
-	;;
-	(abort-upgrade|abort-remove|abort-deconfigure)
-	exit 0
-	;;
-	(*)
-	echo "postinst called with unknown argument \`$1'" >&2
-	exit 0
-	;;
+  configure)
+    if [ -d "$bundle_system" ] && [ -x "$plistbuddy" ]; then
+      mkdir -p "$bundle_jb"
+      for source in "$bundle_system"/*; do
+        [ -e "$source" ] || continue
+        name=${source##*/}
+        [ "$name" = Info.plist ] && continue
+        ln -sf "$source" "$bundle_jb/$name"
+      done
+      # Do not follow an old symlink into the read-only system bundle.
+      rm -f "$bundle_jb/Info.plist"
+      cp "$bundle_system/Info.plist" "$bundle_jb/Info.plist"
+      "$plistbuddy" -c "Delete :SBIconVisibilityDefaultVisible" "$bundle_jb/Info.plist" >/dev/null 2>&1 || :
+      "$plistbuddy" -c "Delete :SBIconVisibilitySetByAppPreference" "$bundle_jb/Info.plist" >/dev/null 2>&1 || :
+      "$plistbuddy" -c "Add :UIDeviceFamily:0 integer 1" "$bundle_jb/Info.plist"
+    fi
+    ;;
 esac
-
 exit 0

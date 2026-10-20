@@ -7,6 +7,32 @@
 
 static NSString *const TPDiagnosticsKey = @"TPVerticalDiagnosticsEnabled";
 
+static NSArray *TPSceneCandidates(void) {
+    unsigned int count = 0;
+    Class *classes = objc_copyClassList(&count);
+    NSMutableArray *candidates = [NSMutableArray array];
+    NSArray *terms = @[@"SceneLayout", @"SplitView", @"Medusa", @"LayoutState", @"SceneManager"];
+    for (unsigned int i = 0; i < count; i++) {
+        NSString *name = NSStringFromClass(classes[i]);
+        if (![name hasPrefix:@"SB"]) continue;
+        BOOL match = NO;
+        for (NSString *term in terms) if ([name containsString:term]) { match = YES; break; }
+        if (!match) continue;
+        unsigned int methodCount = 0;
+        Method *methods = class_copyMethodList(classes[i], &methodCount);
+        NSMutableArray *metadata = [NSMutableArray array];
+        for (unsigned int j = 0; j < methodCount; j++) {
+            const char *types = method_getTypeEncoding(methods[j]);
+            [metadata addObject:@{@"selector": NSStringFromSelector(method_getName(methods[j])),
+                                  @"encoding": types ? @(types) : @"?"}];
+        }
+        free(methods);
+        [candidates addObject:@{@"name": name, @"methods": metadata}];
+    }
+    free(classes);
+    return candidates;
+}
+
 static NSDictionary *TPDescribeMethod(Class cls, NSString *name) {
     Method method = cls ? class_getInstanceMethod(cls, NSSelectorFromString(name)) : NULL;
     if (!method) return @{@"selector": name, @"present": @NO};
@@ -73,7 +99,8 @@ static void TPWriteRuntimeReport(void) {
         @"schemaVersion": @1, @"timestamp": @([[NSDate date] timeIntervalSince1970]),
         @"osVersion": NSProcessInfo.processInfo.operatingSystemVersionString,
         @"architecture": architecture, @"layoutHooksInstalled": @NO,
-        @"verticalBackendVerified": @NO, @"classes": classes
+        @"verticalBackendVerified": @NO, @"classes": classes,
+        @"sceneCandidates": TPSceneCandidates()
     };
     NSError *error = nil;
     NSData *data = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:&error];
