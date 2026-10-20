@@ -352,23 +352,43 @@ static uint16_t forcePadIdiom = 0;
 
 // Scales the grid switcher
 - (void)setGridSwitcherPageScale:(CGFloat)arg1 {
-    return pref.scaleGridSwitcher ? %orig(0.38) : %orig;
+    if (pref.scaleGridSwitcher) {
+        %orig(0.38);
+    } else {
+        %orig;
+    }
 }
 
 - (void)setGridSwitcherVerticalNaturalSpacingPortrait:(CGFloat)arg1 {
-    return pref.scaleGridSwitcher ? %orig(65) : %orig;
+    if (pref.scaleGridSwitcher) {
+        %orig(65);
+    } else {
+        %orig;
+    }
 }
 
 - (void)setGridSwitcherVerticalNaturalSpacingLandscape:(CGFloat)arg1 {
-    return pref.scaleGridSwitcher ? %orig(40) : %orig;
+    if (pref.scaleGridSwitcher) {
+        %orig(40);
+    } else {
+        %orig;
+    }
 }
 
 - (void)setGridSwitcherHorizontalInterpageSpacingPortrait:(CGFloat)arg1 {
-    return pref.scaleGridSwitcher ? %orig(30) : %orig;
+    if (pref.scaleGridSwitcher) {
+        %orig(30);
+    } else {
+        %orig;
+    }
 }
 
 - (void)setGridSwitcherHorizontalInterpageSpacingLandscape:(CGFloat)arg1 {
-    return pref.scaleGridSwitcher ? %orig(10) : %orig;
+    if (pref.scaleGridSwitcher) {
+        %orig(10);
+    } else {
+        %orig;
+    }
 }
 %end
 
