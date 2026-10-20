@@ -1,4 +1,8 @@
 # TrollPad
+
+This branch builds on TrollPad for vertical split layout research. See
+[development status and device evidence checklist](docs/VERTICAL_SPLIT_STATUS_ZH.md).
+The added vertical diagnostics are opt-in; vertical two-app resizing is not yet verified.
 Troll SpringBoard into thinking it's running on iPadOS
 
 ## Features

@@ -1,0 +1,113 @@
+#import "TPVerticalDiagnostics.h"
+#import <UIKit/UIKit.h>
+#import <CoreFoundation/CoreFoundation.h>
+#import <objc/runtime.h>
+#include <stdlib.h>
+#include <string.h>
+
+static NSString *const TPDiagnosticsKey = @"TPVerticalDiagnosticsEnabled";
+
+static NSDictionary *TPDescribeMethod(Class cls, NSString *name) {
+    Method method = cls ? class_getInstanceMethod(cls, NSSelectorFromString(name)) : NULL;
+    if (!method) return @{@"selector": name, @"present": @NO};
+    NSMutableArray *arguments = [NSMutableArray array];
+    for (unsigned int i = 0; i < method_getNumberOfArguments(method); i++) {
+        char *type = method_copyArgumentType(method, i);
+        [arguments addObject:type ? @(type) : @"?"];
+        free(type);
+    }
+    char *returnType = method_copyReturnType(method);
+    NSString *resultType = returnType ? @(returnType) : @"?";
+    free(returnType);
+    const char *encoding = method_getTypeEncoding(method);
+    BOOL direct = NO;
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    for (unsigned int i = 0; i < count; i++) {
+        if (method_getName(methods[i]) == NSSelectorFromString(name)) direct = YES;
+    }
+    free(methods);
+    // A complete structural comparison against the local compiler's C types.
+    // This is diagnostic information only; it cannot establish role semantics,
+    // PAC compatibility, scene lifecycle or a safe hook calling convention.
+    BOOL layoutShape = arguments.count == 6 &&
+        [resultType isEqualToString:@(@encode(CGRect))] &&
+        [arguments[0] isEqualToString:@(@encode(id))] &&
+        [arguments[1] isEqualToString:@(@encode(SEL))] &&
+        [arguments[2] isEqualToString:@(@encode(CGSize))] &&
+        [arguments[3] isEqualToString:@(@encode(NSInteger))] &&
+        [arguments[4] isEqualToString:@(@encode(NSInteger))] &&
+        [arguments[5] isEqualToString:@(@encode(NSUInteger))];
+    return @{@"selector": name, @"present": @YES, @"directImplementation": @(direct),
+             @"encoding": encoding ? @(encoding) : @"?", @"returnType": resultType,
+             @"arguments": arguments, @"matchesLocalLegacyShape": @(layoutShape)};
+}
+
+static void TPWriteRuntimeReport(void) {
+    NSDictionary *targets = @{
+        @"SBMainDisplaySceneLayoutViewController": @[
+            @"viewDidLoad", @"_layoutFrameForSize:withRole:inInterfaceOrientation:frameOptions:",
+            @"_setSeparatorViewAlpha:", @"_shouldNubViewBeVisibleForLayoutRole:inLayoutState:"],
+        @"SBMainSwitcherControllerCoordinator": @[@"_loadContentViewControllerIfNecessaryForWindowScene:"],
+        @"SBMainWorkspace": @[@"isMedusaEnabled"],
+        @"SBPlatformController": @[@"medusaCapabilities"],
+        @"SBApplication": @[@"isMedusaCapable", @"mainSceneWantsFullscreen"]
+    };
+    NSMutableArray *classes = [NSMutableArray array];
+    for (NSString *name in [[targets allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
+        Class cls = objc_getClass(name.UTF8String);
+        NSMutableArray *methods = [NSMutableArray array];
+        for (NSString *selector in targets[name]) [methods addObject:TPDescribeMethod(cls, selector)];
+        const char *image = cls ? class_getImageName(cls) : NULL;
+        [classes addObject:@{@"name": name, @"present": @(cls != Nil),
+                            @"image": image ? @(image) : @"", @"methods": methods}];
+    }
+#if defined(__arm64e__)
+    NSString *architecture = @"arm64e";
+#elif defined(__arm64__)
+    NSString *architecture = @"arm64";
+#else
+    NSString *architecture = @"other";
+#endif
+    NSDictionary *report = @{
+        @"schemaVersion": @1, @"timestamp": @([[NSDate date] timeIntervalSince1970]),
+        @"osVersion": NSProcessInfo.processInfo.operatingSystemVersionString,
+        @"architecture": architecture, @"layoutHooksInstalled": @NO,
+        @"verticalBackendVerified": @NO, @"classes": classes
+    };
+    NSError *error = nil;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:report options:NSJSONWritingPrettyPrinted error:&error];
+    if (!data) { NSLog(@"[TrollPadVertical] report serialization failed: %@", error); return; }
+    NSString *directory = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/TrollPad"];
+    BOOL made = [[NSFileManager defaultManager] createDirectoryAtPath:directory
+                                        withIntermediateDirectories:YES attributes:nil error:&error];
+    NSString *path = [directory stringByAppendingPathComponent:@"vertical-runtime.json"];
+    if (!made || ![data writeToFile:path options:NSDataWritingAtomic error:&error]) {
+        NSLog(@"[TrollPadVertical] report write failed: %@", error);
+        return;
+    }
+    NSLog(@"[TrollPadVertical] read-only runtime report: %@; vertical backend unverified", path);
+}
+
+static void TPRefreshDiagnostics(void) {
+    CFPreferencesAppSynchronize(CFSTR("com.apple.springboard"));
+    CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)TPDiagnosticsKey,
+                                                       CFSTR("com.apple.springboard"));
+    BOOL enabled = value && CFGetTypeID(value) == CFBooleanGetTypeID() &&
+                   CFBooleanGetValue((CFBooleanRef)value);
+    if (value) CFRelease(value);
+    if (enabled) TPWriteRuntimeReport();
+}
+
+static void TPDiagnosticRequest(CFNotificationCenterRef center, void *observer,
+                                 CFStringRef name, const void *object, CFDictionaryRef info) {
+    (void)center; (void)observer; (void)name; (void)object; (void)info;
+    dispatch_async(dispatch_get_main_queue(), ^{ TPRefreshDiagnostics(); });
+}
+
+void TPStartVerticalDiagnostics(void) {
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL,
+        TPDiagnosticRequest, CFSTR("com.kdt.trollpad.vertical-diagnostics"), NULL,
+        CFNotificationSuspensionBehaviorCoalesce);
+    TPRefreshDiagnostics();
+}

@@ -3,6 +3,7 @@
 #import "SpringBoard.h"
 #import "TPPrefsObserver.h"
 #import "UIKitPrivate.h"
+#import "VerticalSplit/TPVerticalDiagnostics.h"
 
 #include <assert.h>
 #include <dlfcn.h>
@@ -410,4 +411,5 @@ BOOL MGGetBoolAnswer(NSString* property);
     }
 
     pref = [TPPrefsObserver new];
+    dispatch_async(dispatch_get_main_queue(), ^{ TPStartVerticalDiagnostics(); });
 }

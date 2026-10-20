@@ -1,48 +1,61 @@
-name: Theos CI
-
+name: TrollPad Rootless
 on:
   push:
   pull_request:
-
+  workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   build:
-
-    runs-on: macos-14
-
+    runs-on: macos-15
+    env:
+      THEOS: ${{ github.workspace }}/theos
+      THEOS_PACKAGE_SCHEME: rootless
     steps:
-    - uses: actions/checkout@main
-
-    - name: Checkout theos/theos
-      uses: actions/checkout@main
-      with:
-        repository: theos/theos
-        ref: master
-        submodules: recursive
-        path: theos
-
-    - name: Checkout theos/sdks
-      uses: actions/checkout@main
-      with:
-        repository: theos/sdks
-        ref: master
-        sparse-checkout: iPhoneOS16.5.sdk
-        path: theos/sdks
-
-    - name: Ensure main utils are installed
-      uses: dhinakg/procursus-action@main
-      with:
-        packages: coreutils make xz ldid
-          
-    - name: Build
-      run: |
-        export THEOS=theos
-        
-        gmake package FINALPACKAGE=1
-        gmake package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
-        #gmake package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=roothide
-
-    - name: Upload packages
-      uses: actions/upload-artifact@main
-      with:
-        name: packages
-        path: packages/*.deb
+      - uses: actions/checkout@v4
+      - name: Test independent geometry
+        run: python3 scripts/run_tests.py
+      - name: Checkout Theos
+        uses: actions/checkout@v4
+        with:
+          repository: theos/theos
+          ref: master
+          submodules: recursive
+          path: theos
+      - name: Checkout iOS SDK
+        uses: actions/checkout@v4
+        with:
+          repository: theos/sdks
+          ref: master
+          sparse-checkout: iPhoneOS16.5.sdk
+          path: theos/sdks
+      - name: Install build utilities
+        uses: dhinakg/procursus-action@main
+        with:
+          packages: coreutils make xz ldid
+      - name: Build Rootless package and preserve log
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p logs
+          git -C "$THEOS" rev-parse HEAD | tee logs/theos-revision.txt
+          git -C "$THEOS/sdks" rev-parse HEAD | tee logs/sdk-revision.txt
+          xcodebuild -version | tee logs/xcode-version.txt
+          gmake clean
+          gmake package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless 2>&1 | tee logs/build.txt
+          shasum -a 256 packages/*.deb | tee logs/SHA256SUMS.txt
+      - name: Upload Rootless package
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrollPad-rootless-${{ github.sha }}
+          path: |
+            packages/*.deb
+            logs/SHA256SUMS.txt
+          if-no-files-found: error
+      - name: Upload build evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: TrollPad-build-logs-${{ github.sha }}
+          path: logs/
+          if-no-files-found: ignore

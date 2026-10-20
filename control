@@ -1,8 +1,8 @@
 Package: com.kdt.trollpad
 Name: TrollPad
-Version: 1.3
-Architecture: iphoneos-arm
-Description: Troll SpringBoard into thinking it's running on iPadOS.
+Version: 1.3.1~vertical1
+Architecture: iphoneos-arm64
+Description: TrollPad with opt-in vertical layout diagnostics. Vertical two-app resizing is not yet verified.
 Maintainer: khanhduytran0
 Author: khanhduytran0
 Section: Tweaks
