@@ -41,7 +41,7 @@ jobs:
           git -C "$THEOS" rev-parse HEAD | tee logs/theos-revision.txt
           git -C "$THEOS/sdks" rev-parse HEAD | tee logs/sdk-revision.txt
           xcodebuild -version | tee logs/xcode-version.txt
-          gmake clean
+          # GitHub-hosted checkout is fresh; no prior build outputs to clean.
           gmake package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless 2>&1 | tee logs/build.txt
           shasum -a 256 packages/*.deb | tee logs/SHA256SUMS.txt
       - name: Upload Rootless package
