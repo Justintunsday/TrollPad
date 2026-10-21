@@ -1,41 +1,52 @@
 # TrollPad 上下分屏开发状态
 
-以 Justintunsday/TrollPad 为底包，基线提交 `3a841b3aa26d96df2acbcdb129dcfddf69a62b06`。新增代码编入 TrollPadSB，复用底包的 Medusa、Dock 和应用侧能力。商业 DEB、反汇编、设备隐私报告不进入仓库。
+以用户指定的 Justintunsday/TrollPad 为底包，基线 `3a841b3aa26d96df2acbcdb129dcfddf69a62b06`。独立新增代码直接编入 TrollPadSB，复用底包 Medusa、Dock、偏好设置及应用侧能力。商业 DEB、反汇编和原始设备报告不进入仓库或 Actions。
 
-## 已取得的证据
+## 已取得的真机证据
 
-- 独立 C 几何通过 17,560 组窗格测试，涵盖非零原点、间隙、最小高度、1/3～2/3 限制、非法输入和横屏退回。
-- vertical1、vertical2 经 GitHub Actions/macOS 编译，通过 Rootless 包检查，包含 arm64 和 arm64e。
-- 已经用户授权，通过 SSH 在 iPhone SE 2（iPhone12,8）、iOS 16.1.1（20B101）、Dopamine/ElleKit 上进行受控实验。
-- 旧版 `SBMainDisplaySceneLayoutViewController` 在目标系统不存在。实际 Scene 布局入口为 `SBDisplayItemLayoutAttributesCalculator` 的 `frameForLayoutRole:inAppLayout:containerOrientation:windowScene:`。
-- 宿主布局另经 `SBSwitcherModifier` 的 `frameForLayoutRole:inAppLayout:withBounds:`。实际目标接收者为 `SBSplitViewRootSwitcherModifier`；它继承此方法。仅改变 Scene 计算器不足以同步宿主。
-- 通过原生 Split View UIAction 创建 Calculator + Settings 双 App，实际布局有两个 item、role 1 和 2、spaceConfiguration 4；没有手工构造 scene ID 或持久化布局。
-- 临时双 Hook 实验获得两个真实前台 Scene 和宿主一致的竖屏区域：375×332.5，第二窗格 y=334.5。Calculator 客户端 UIWindow 也收到 375×332.5 的 bounds。
-- 本项目明确将此设备上观察到的 role 1 映射到上方、role 2 到下方；不沿用旧二进制的上下角色假设。
+目标为 iPhone SE 2（iPhone12,8）、iOS 16.1.1（20B101）、Dopamine/ElleKit。已经用户授权通过 SSH 安装、恢复与测试。
 
-## vertical3 实现与限制
+- 旧版 `SBMainDisplaySceneLayoutViewController` 在目标系统缺失。实际 Scene 几何入口是 `SBDisplayItemLayoutAttributesCalculator frameForLayoutRole:inAppLayout:containerOrientation:windowScene:`。
+- 显示宿主另经 `SBSwitcherModifier frameForLayoutRole:inAppLayout:withBounds:`。实际 Split View 接收者为 `SBSplitViewRootSwitcherModifier`，继承该方法；源码为目标子类先增加自有方法，避免修改整个基类。
+- 通过原生 Split View UIAction 建立 Calculator + Settings，实际两个 item、role 1/2、spaceConfiguration 4。不构造 scene ID，不手工改写持久化 AppLayout。
+- 本设备明确采用 role 1 上、role 2 下；不把旧版角色映射视作通用常量。
+- 原生安装包已取得 Scene 和宿主一致的 375×332.5 上下区域，Calculator 客户端 UIWindow 也收到对应尺寸。用户确认两边显示、触控正常。
+- vertical8 的原生事务已成功在 1/3、2/3 间调整两个真实前台 Scene 和宿主：上方 221.5/443.5 pt，下方 443.5/221.5 pt，间隙 2 pt。用户再次确认调整大小后显示、触控仍正常。
+- 目前这些证据来自内置 Calculator 与 Settings，不代表所有 App、方向和系统版本都已通过测试。
 
-新增默认关闭的 `TPVerticalSplitEnabled` 设置，启动 SpringBoard 时读取。只允许系统 build 20B101，并完整比对两个方法的 Objective-C 类型编码；不匹配则不安装布局 Hook。宿主 Hook 先给目标子类增加自有方法，避免修改继承的基类方法。两个 Hook 先调用原实现，非主线程、非双 App、非主屏、非竖屏或不匹配的 bounds 均退回。
+## 几何和触控区域修正
 
-固定布局使用独立几何模块，间隙 2 pt，最小窗格高度 151 pt，比例 50:50。本次封装的编译、安装和用户触控验证需另行记录；此前临时 Frida 实验成功不等于安装包验证完成。
+连续几何通过 17,560 组窗格测试。新增的整数/半点对齐几何通过 20,002 组测试，验证边界、最小高度、间隙、非零原点、非法输入，以及矩形求交后触控条仍精确等于 40 pt。
 
-**尚未完成：** 拖动手势与实时 Scene 提交、键盘占用、旋转与锁屏生命周期、全面的触控路由和退出验证。不能视为完成版 FloatingDockPlus 移植。
+早期非对齐比例产生 `224.00000000000003` 等坐标尾差，触发 `SBTouchRegionManager` 的内部一致性断言。实际系统比较函数容许的误差极小。对齐后相同方向的原生事务已取得上述真机成功证据。没有屏蔽系统断言或丢弃触控检查。
 
-一次尝试通过 Frida 创建 Block 调用 `requestTransitionWithBuilder:` 刷新比例导致 SpringBoard EXC_BAD_ACCESS，崩溃提示可能涉及 pointer authentication。确切原因尚未证实。该刷新机制没有进入本源码，不再重复执行。后续应验证原生编译的事务路径及其语义。
+## 当前源码
 
-## 设置和恢复
+- `TPVerticalSplitEnabled`：默认关闭，SpringBoard 启动读取。仅允许 build 20B101，并完整比对关键方法类型编码。
+- `TPVerticalDividerEnabled`：默认关闭。vertical9 新增中央拖动把手，预览位置、松手提交；仅把手区域参与 UI hit test，不将窗口设为 key。只有主屏、竖屏、解锁、两个 App 前台且多任务界面关闭时显示。UIKit 键盘通知也用于隐藏把手。**该 UI 的打包和人工拖动验证仍需另行记录。**
+- `TPVerticalPeekEnabled`：默认关闭的过渡预览研究。目标原生第二 App 选择状态已观察到 peekConfiguration 2、spaceConfiguration 4，以及旧的约 45 pt 左侧预览。新增 ABI/ivar 检查后的预览布局 Hook，**尚未完成真机动画验证**。
+- `TPVerticalDiagnosticsEnabled`：默认关闭的只读元数据报告，可关闭再打开刷新，位置为 SpringBoard home 下 `Library/Logs/TrollPad/vertical-runtime.json`。
+- 原生尺寸事务使用已有活跃 Scene handle 构建实体，由 Apple 编译器生成 ARC Block；不使用手工 Frida Block。研究入口另由 `TPVerticalResizeResearchEnabled` 保护，拖动 UI 启用后可调用同一已验证后端。
 
-- “上下分屏诊断”只输出只读元数据，可关闭再打开刷新，报告为 SpringBoard home 下 `Library/Logs/TrollPad/vertical-runtime.json`。
-- “启用上下分屏”默认关闭，修改后重启 SpringBoard；此版本没有比例拖动功能。进入原生双 App Split View 后才改变几何。
-- 测试前保留 SSH、安装包和独立定时恢复。用户当前重新安装了 vertical2，以其当前可用状态为测试基线；不得按最初“未安装”状态擅自卸载。
-- 恢复时关闭 `com.apple.springboard` 域 `TPVerticalSplitEnabled`，重启 SpringBoard。必要时恢复已验证的 vertical2 包。
+所有新功能仍是实验功能；变更功能开关后需重启 SpringBoard。横屏回退原逻辑。尚需完成拖动 UI、过渡动画、键盘、旋转、锁屏、退出，以及更多 App 的生命周期验证。
 
-## 构建
+## 构建与安装
 
-GitHub Actions 使用 macOS/Xcode、Theos、iOS16.5 SDK 构建，保存日志与 SHA256。Windows 几何测试：
+GitHub Actions 使用 macOS/Xcode、Theos、iOS16.5 SDK，先执行 C 测试，再构建 Rootless arm64/arm64e，保存 DEB、日志、工具链版本与 SHA256。PR 分支只跑 pull_request，main 保留 push 构建，避免重复任务。
 
-```powershell
-python scripts/run_tests.py --cc C:\path\zig.exe cc
-```
+Rootless 安装脚本使用固定 `/var/jb`，不从 HOME 推导路径。资源链接使用 `ln -sfn`，避免升级时跟随已有目录软链接；修正后的 vertical4 已在手机上连续安装两次成功。原始系统资源不会被改写。
 
-Rootless 编译：`gmake package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless`。编译成功只代表构建通过，不能替代设备验证。
+Windows 数学测试：`python scripts/run_tests.py --cc C:\path\zig.exe cc`。
+
+## 仍需保留的风险记录
+
+- Frida 手工构造的过渡 Block 曾出现可能涉及指针认证的崩溃；它没有进入当前实现。
+- 一次广泛切换器观察期间出现原生方法缓存路径崩溃，其归因未完全隔离；后续不再使用该基类方法替换作为观察工具。
+- 改变全局比例后简单打开、关闭 App Switcher，并不足以保证本系统重新提交两个 Scene 的尺寸。因此当前尺寸提交使用已验证的原生事务，而不是照搬旧刷新调用。
+- 固定布局、后端调整尺寸、拖动 UI、动画及生命周期各自是独立验证阶段，不能互相替代成功结论。
+
+## 恢复
+
+安装测试前保留 SSH、旧包和独立定时恢复。当前用户重新安装过 vertical2，不能沿用最初“未安装”的基线擅自卸载。故障时关闭上述布局、分隔条、预览和研究开关后重启 SpringBoard，必要时恢复旧包。完成测试时应核对定时恢复、临时 Frida 服务、端口转发及自动锁屏状态。
+
+动画行为参考和后续路线见 [ANIMATION_APPROACH_ZH.md](ANIMATION_APPROACH_ZH.md)。本项目尚不能宣称完成 FloatingDockPlus 在 iOS16 上的全部移植。

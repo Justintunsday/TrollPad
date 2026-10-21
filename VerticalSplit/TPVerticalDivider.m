@@ -32,6 +32,7 @@
     CGRect _viewport;
     TPVerticalLayout _layout;
     double _previewY;
+    double _proposedY;
 }
 @property(nonatomic, strong) TPVerticalDividerWindow *window;
 @property(nonatomic, strong) TPVerticalGrabber *grabber;
@@ -138,14 +139,18 @@
         if (self.busy || !TPCopyActiveVerticalLayout(&current)) { gesture.enabled = NO; gesture.enabled = YES; return; }
         self.tracking = YES;
         _previewY = current.dividerY;
+        _proposedY = current.dividerY;
     }
     if (gesture.state == UIGestureRecognizerStateBegan || gesture.state == UIGestureRecognizerStateChanged || gesture.state == UIGestureRecognizerStateEnded) {
         if (!self.tracking) return;
         CGPoint translation = [gesture translationInView:self.window];
         TPRect viewport = {_viewport.origin.x, _viewport.origin.y, _viewport.size.width, _viewport.size.height};
         TPVerticalLayout preview;
+        TPVerticalLayout continuous;
         double step = self.window.screen.scale == 2 ? 0.5 : 1.0;
-        if (TPComputeAlignedVerticalLayout(viewport, _previewY + translation.y, 2, 151, 1, step, &preview)) {
+        // Preserve sub-grid finger movement; round only the displayed proposal.
+        if (TPComputeVerticalLayout(viewport, _proposedY + translation.y, 2, 151, 1, &continuous)) _proposedY = continuous.dividerY;
+        if (TPComputeAlignedVerticalLayout(viewport, _proposedY, 2, 151, 1, step, &preview)) {
             _previewY = preview.dividerY;
             [self positionGrabberAtY:_previewY];
         }
