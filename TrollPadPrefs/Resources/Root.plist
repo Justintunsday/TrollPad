@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>上下分屏研究</string>
 			<key>footerText</key>
-			<string>固定上下布局仅限已验证的 iOS 16.1.1，默认关闭，修改后需重启 SpringBoard。暂不支持拖动比例。诊断开关独立生成兼容性报告。</string>
+			<string>上下布局仅限已验证的 iOS 16.1.1，默认关闭，修改后需重启 SpringBoard。可拖动分隔条，松手后调整两边大小；范围约为 1/3～2/3。诊断开关独立生成兼容性报告。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -30,7 +30,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>实验性固定 50:50</string>
+			<string>实验性上下分屏</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -43,6 +43,24 @@
 			<string>TPVerticalSplitEnabled</string>
 			<key>label</key>
 			<string>启用上下分屏（需重启桌面）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>分隔条</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.apple.springboard</string>
+			<key>key</key>
+			<string>TPVerticalDividerEnabled</string>
+			<key>label</key>
+			<string>显示可拖动分隔条（需重启桌面）</string>
 		</dict>
 		<dict>
 			<key>cell</key>

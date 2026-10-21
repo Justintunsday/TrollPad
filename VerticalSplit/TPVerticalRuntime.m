@@ -13,6 +13,7 @@
 static CGRect (*TPOriginalSceneFrame)(id, SEL, NSInteger, id, NSInteger, id);
 static CGRect (*TPOriginalHostFrame)(id, SEL, NSInteger, id, CGRect);
 static BOOL TPRuntimeInstalled;
+static BOOL TPDividerEnabled;
 static double TPDividerRatio = 0.5;
 static BOOL TPPreviewEnabled;
 static BOOL TPBuildingPeekLayout;
@@ -204,7 +205,7 @@ static void TPStartPeekPreview(void) {
     return YES;
 }
 + (BOOL)requestRatio:(double)ratio primaryHandle:(id)primary secondaryHandle:(id)secondary {
-    if (!CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalResizeResearchEnabled"), CFSTR("com.apple.springboard"), NULL)) return NO;
+    if (!TPDividerEnabled && !CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalResizeResearchEnabled"), CFSTR("com.apple.springboard"), NULL)) return NO;
     if (!TPRuntimeInstalled || ![NSThread isMainThread] || !isfinite(ratio)) return NO;
     UIWindowScene *scene = TPMainScene();
     if (!scene || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return NO;
@@ -255,6 +256,55 @@ static void TPStartPeekPreview(void) {
 }
 @end
 
+UIWindowScene *TPVerticalWindowScene(void) {
+    return TPRuntimeInstalled && [NSThread isMainThread] ? TPMainScene() : nil;
+}
+
+static BOOL TPActiveHandles(id *first, id *second) {
+    if (!TPRuntimeInstalled || ![NSThread isMainThread]) return NO;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return NO;
+    id lock = TPObject((id)objc_getClass("SBLockScreenManager"), "sharedInstanceIfExists");
+    SEL locked = sel_registerName("isUILocked");
+    if (!lock || !TPEncoding(object_getClass(lock), locked, "B16@0:8") ||
+        ((BOOL (*)(id, SEL))objc_msgSend)(lock, locked)) return NO;
+    id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
+    SEL visible = sel_registerName("isMainSwitcherVisible");
+    SEL handleSelector = sel_registerName("_deviceApplicationSceneHandleForDisplayItem:");
+    if (!TPEncoding(object_getClass(coordinator), visible, "B16@0:8") ||
+        !TPEncoding(object_getClass(coordinator), handleSelector, "@24@0:8@16") ||
+        ((BOOL (*)(id, SEL))objc_msgSend)(coordinator, visible)) return NO;
+    id layout = TPObject(TPObject(coordinator, "layoutState"), "appLayout");
+    if (!TPSplitPair(layout, 1)) return NO;
+    SEL itemSelector = sel_registerName("itemForLayoutRole:");
+    id firstItem = ((id (*)(id, SEL, NSInteger))objc_msgSend)(layout, itemSelector, 1);
+    id secondItem = ((id (*)(id, SEL, NSInteger))objc_msgSend)(layout, itemSelector, 2);
+    id a = ((id (*)(id, SEL, id))objc_msgSend)(coordinator, handleSelector, firstItem);
+    id b = ((id (*)(id, SEL, id))objc_msgSend)(coordinator, handleSelector, secondItem);
+    SEL foreground = sel_registerName("isEffectivelyForeground");
+    if (!a || !b || a == b || !TPEncoding(object_getClass(a), foreground, "B16@0:8") ||
+        !TPEncoding(object_getClass(b), foreground, "B16@0:8") ||
+        !((BOOL (*)(id, SEL))objc_msgSend)(a, foreground) ||
+        !((BOOL (*)(id, SEL))objc_msgSend)(b, foreground)) return NO;
+    if (first) *first = a;
+    if (second) *second = b;
+    return YES;
+}
+
+BOOL TPCopyActiveVerticalLayout(TPVerticalLayout *layout) {
+    if (!layout || !TPActiveHandles(NULL, NULL)) return NO;
+    CGRect bounds = TPMainScene().coordinateSpace.bounds;
+    TPRect rect = {bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height};
+    double step = UIScreen.mainScreen.scale == 2 ? 0.5 : 1.0;
+    return TPComputeAlignedVerticalLayout(rect, rect.y + rect.height * TPDividerRatio, 2, 151, 1, step, layout);
+}
+
+BOOL TPResizeVerticalSplit(double ratio) {
+    id first, second;
+    if (!TPDividerEnabled || !TPActiveHandles(&first, &second)) return NO;
+    return [TPVerticalResearch requestRatio:ratio primaryHandle:first secondaryHandle:second];
+}
+
 void TPStartVerticalRuntime(void) {
     static BOOL attempted;
     if (attempted) return;
@@ -286,5 +336,7 @@ void TPStartVerticalRuntime(void) {
     MSHookMessageEx(modifier, hostSelector, (IMP)TPHostFrame, (IMP *)&TPOriginalHostFrame);
     TPRuntimeInstalled = YES;
     TPStartPeekPreview();
-    NSLog(@"[TrollPadVertical] Experimental fixed 50:50 layout installed for 20B101");
+    TPDividerEnabled = CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalDividerEnabled"), CFSTR("com.apple.springboard"), NULL);
+    if (TPDividerEnabled) TPStartVerticalDivider();
+    NSLog(@"[TrollPadVertical] Experimental vertical layout installed for 20B101");
 }
