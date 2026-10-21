@@ -260,6 +260,17 @@ UIWindowScene *TPVerticalWindowScene(void) {
     return TPRuntimeInstalled && [NSThread isMainThread] ? TPMainScene() : nil;
 }
 
+BOOL TPVerticalKeyboardVisible(void) {
+    if (!TPRuntimeInstalled || ![NSThread isMainThread]) return YES;
+    Class delegateClass = objc_getClass("UIKeyboardSceneDelegate");
+    SEL active = sel_registerName("activeKeyboardSceneDelegate");
+    SEL showing = sel_registerName("showingKeyboard");
+    if (!TPEncoding(object_getClass(delegateClass), active, "@16@0:8") ||
+        !TPEncoding(delegateClass, showing, "B16@0:8")) return YES;
+    id delegate = ((id (*)(id, SEL))objc_msgSend)((id)delegateClass, active);
+    return delegate && ((BOOL (*)(id, SEL))objc_msgSend)(delegate, showing);
+}
+
 static BOOL TPActiveHandles(id *first, id *second) {
     if (!TPRuntimeInstalled || ![NSThread isMainThread]) return NO;
     UIWindowScene *scene = TPMainScene();

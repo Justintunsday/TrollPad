@@ -40,23 +40,17 @@
 @property(nonatomic, strong) NSTimer *timer;
 @property(nonatomic) BOOL tracking;
 @property(nonatomic) BOOL busy;
-@property(nonatomic) BOOL keyboardVisible;
 @end
 
 @implementation TPVerticalDividerController
 - (instancetype)init {
     if ((self = [super init])) {
-        NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
-        [center addObserver:self selector:@selector(keyboardShown:) name:UIKeyboardWillShowNotification object:nil];
-        [center addObserver:self selector:@selector(keyboardHidden:) name:UIKeyboardDidHideNotification object:nil];
         self.timer = [NSTimer timerWithTimeInterval:0.25 target:self selector:@selector(refresh) userInfo:nil repeats:YES];
         [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes];
         [self refresh];
     }
     return self;
 }
-- (void)keyboardShown:(NSNotification *)notification { self.keyboardVisible = YES; [self refresh]; }
-- (void)keyboardHidden:(NSNotification *)notification { self.keyboardVisible = NO; [self refresh]; }
 
 - (void)createWindowForScene:(UIWindowScene *)scene {
     self.window.hidden = YES;
@@ -101,7 +95,9 @@
 - (void)refresh {
     TPVerticalLayout layout;
     UIWindowScene *scene = TPVerticalWindowScene();
-    BOOL valid = scene && !self.keyboardVisible && TPCopyActiveVerticalLayout(&layout);
+    // SpringBoard can receive a show notification without the matching app-side
+    // hide notification. Query current state rather than latching a stale flag.
+    BOOL valid = scene && !TPVerticalKeyboardVisible() && TPCopyActiveVerticalLayout(&layout);
     if (!valid) {
         self.window.hidden = YES;
         if (self.tracking) { self.tracking = NO; self.pan.enabled = NO; self.pan.enabled = YES; }
@@ -121,7 +117,7 @@
 }
 
 - (BOOL)commitRatio:(double)ratio {
-    if (self.busy || self.keyboardVisible || !isfinite(ratio)) return NO;
+    if (self.busy || TPVerticalKeyboardVisible() || !isfinite(ratio)) return NO;
     BOOL accepted = TPResizeVerticalSplit(ratio);
     if (accepted) {
         self.busy = YES;

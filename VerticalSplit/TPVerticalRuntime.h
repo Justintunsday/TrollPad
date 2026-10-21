@@ -5,6 +5,7 @@
 // Experimental layout. Read feature preferences at SpringBoard start.
 void TPStartVerticalRuntime(void);
 UIWindowScene *TPVerticalWindowScene(void);
+BOOL TPVerticalKeyboardVisible(void);
 BOOL TPCopyActiveVerticalLayout(TPVerticalLayout *layout);
 BOOL TPResizeVerticalSplit(double ratio);
 void TPStartVerticalDivider(void);

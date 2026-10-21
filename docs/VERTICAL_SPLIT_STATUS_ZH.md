@@ -23,7 +23,7 @@
 ## 当前源码
 
 - `TPVerticalSplitEnabled`：默认关闭，SpringBoard 启动读取。仅允许 build 20B101，并完整比对关键方法类型编码。
-- `TPVerticalDividerEnabled`：默认关闭。vertical9 新增中央拖动把手，预览位置、松手提交；仅把手区域参与 UI hit test，不将窗口设为 key。只有主屏、竖屏、解锁、两个 App 前台且多任务界面关闭时显示。UIKit 键盘通知也用于隐藏把手。vertical9 人工反馈仍无法有效调整；观察已收到完整开始、移动、结束手势，不能归因为触控完全未到达。vertical10 修复逐事件取整丢失慢速位移，已通过 GitHub 构建、Rootless/双架构检查并安装；**人工拖动是否修复尚待确认**。
+- `TPVerticalDividerEnabled`：默认关闭。vertical9 新增中央拖动把手，预览位置、松手提交；仅把手区域参与 UI hit test，不将窗口设为 key。只有主屏、竖屏、解锁、两个 App 前台且多任务界面关闭时显示。vertical9 曾收到完整开始、移动、结束手势；vertical10 修复逐事件取整丢失慢速位移，已构建安装，但用户仍报告不能跟随。后续读到旧键盘通知标志为真、当前 `UIKeyboardSceneDelegate.showingKeyboard` 为假，把手窗口因此隐藏；尺寸提交接口仍可成功调整到 60%。vertical11 改为查询当前键盘状态，检查两个 getter 的完整类型编码，不再缓存通知布尔值。**此修正及物理拖动仍待安装验证**；键盘弹出、收起及跨 App 的行为也尚未验证完整。
 - `TPVerticalPeekEnabled`：默认关闭的过渡预览研究。目标原生第二 App 选择状态已观察到 peekConfiguration 2、spaceConfiguration 4，以及旧的约 45 pt 左侧预览。新增 ABI/ivar 检查后的预览布局 Hook，**尚未完成真机动画验证**。
 - `TPVerticalDiagnosticsEnabled`：默认关闭的只读元数据报告，可关闭再打开刷新，位置为 SpringBoard home 下 `Library/Logs/TrollPad/vertical-runtime.json`。
 - 原生尺寸事务使用已有活跃 Scene handle 构建实体，由 Apple 编译器生成 ARC Block；不使用手工 Frida Block。研究入口另由 `TPVerticalResizeResearchEnabled` 保护，拖动 UI 启用后可调用同一已验证后端。
