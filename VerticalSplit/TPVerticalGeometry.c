@@ -33,3 +33,27 @@ int TPComputeVerticalLayout(TPRect v, double requested, double gap, double minim
     };
     return 1;
 }
+
+static int on_grid(double value, double step) {
+    double units = value / step;
+    return isfinite(units) && units == round(units);
+}
+
+int TPComputeAlignedVerticalLayout(TPRect v, double requested, double gap, double minimum,
+                                   int orientation, double step, TPVerticalLayout *out) {
+    TPVerticalLayout continuous, aligned;
+    if (!out || (step != 0.5 && step != 1) ||
+        !TPComputeVerticalLayout(v, requested, gap, minimum, orientation, &continuous) ||
+        !on_grid(v.x, step) || !on_grid(v.y, step) ||
+        !on_grid(v.width, step) || !on_grid(v.height, step) || !on_grid(gap / 2, step)) return 0;
+    double low = ceil((v.y + fmax(v.height / 3, minimum + gap / 2)) / step) * step;
+    double high = floor((v.y + fmin(v.height / 3 * 2, v.height - minimum - gap / 2)) / step) * step;
+    if (!isfinite(low) || !isfinite(high) || low > high) return 0;
+    double divider = round(continuous.dividerY / step) * step;
+    divider = fmax(low, fmin(divider, high));
+    if (!TPComputeVerticalLayout(v, divider, gap, minimum, orientation, &aligned) ||
+        !on_grid(aligned.upper.height, step) || !on_grid(aligned.lower.y, step) ||
+        !on_grid(aligned.lower.height, step)) return 0;
+    *out = aligned;
+    return 1;
+}

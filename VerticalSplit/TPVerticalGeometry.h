@@ -12,6 +12,12 @@ int TPComputeVerticalLayout(TPRect viewport, double requestedDividerY,
                             double gap, double minimumPaneHeight,
                             int orientation, TPVerticalLayout *output);
 
+// Binary-exact point/half-point grid for native touch-region edge comparisons.
+// step must be 1 or 0.5; viewport and half-gap must already be on that grid.
+int TPComputeAlignedVerticalLayout(TPRect viewport, double requestedDividerY,
+                                   double gap, double minimumPaneHeight,
+                                   int orientation, double step, TPVerticalLayout *output);
+
 // Historical iOS13/14 evidence only; these role IDs are NOT an iOS16 mapping.
 int TPLegacyRoleRequestMatches(double screenWidth, double requestedWidth,
                                int role, int orientation);
