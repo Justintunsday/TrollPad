@@ -8,11 +8,17 @@
 #include <sys/sysctl.h>
 #include <string.h>
 #include <math.h>
+#include <stdlib.h>
 
 static CGRect (*TPOriginalSceneFrame)(id, SEL, NSInteger, id, NSInteger, id);
 static CGRect (*TPOriginalHostFrame)(id, SEL, NSInteger, id, CGRect);
 static BOOL TPRuntimeInstalled;
 static double TPDividerRatio = 0.5;
+static BOOL TPPreviewEnabled;
+static BOOL TPBuildingPeekLayout;
+static id (*TPOriginalLayoutState)(id, SEL, id);
+static CGRect (*TPOriginalPeekFrame)(id, SEL, NSInteger, id, CGRect);
+static Ivar TPPeekConfigurationIvar, TPSpaceConfigurationIvar, TPPeekingLayoutIvar;
 
 
 
@@ -39,6 +45,27 @@ static UIWindowScene *TPMainScene(void) {
     return [scene isKindOfClass:[UIWindowScene class]] ? scene : nil;
 }
 
+static BOOL TPSinglePrimary(id layout, NSInteger role) {
+    if (role != 1) return NO;
+    id items = TPObject(layout, "allItems");
+    return [items isKindOfClass:[NSArray class]] && [items count] == 1;
+}
+
+static NSInteger TPInteger(id object, const char *name) {
+    return ((NSInteger (*)(id, SEL))objc_msgSend)(object, sel_registerName(name));
+}
+
+static BOOL TPIsPeekScene(id layout, NSInteger role) {
+    if (!TPPreviewEnabled || !TPSinglePrimary(layout, role)) return NO;
+    if (TPBuildingPeekLayout) return YES;
+    id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
+    id state = TPObject(coordinator, "layoutState");
+    // Values observed in the native portrait second-App picker on 20B101.
+    return state && TPInteger(state, "peekConfiguration") == 2 &&
+           TPInteger(state, "spaceConfiguration") == 4 &&
+           [TPObject(state, "appLayout") isEqual:layout];
+}
+
 static BOOL TPFrame(CGRect viewport, NSInteger role, CGRect *result) {
     if (viewport.size.height <= viewport.size.width) return NO;
     TPVerticalLayout layout;
@@ -51,7 +78,8 @@ static BOOL TPFrame(CGRect viewport, NSInteger role, CGRect *result) {
 
 static CGRect TPSceneFrame(id self, SEL cmd, NSInteger role, id layout, NSInteger orientation, id scene) {
     CGRect original = TPOriginalSceneFrame(self, cmd, role, layout, orientation, scene);
-    if (![NSThread isMainThread] || orientation != UIInterfaceOrientationPortrait || !TPSplitPair(layout, role)) return original;
+    if (![NSThread isMainThread] || orientation != UIInterfaceOrientationPortrait ||
+        (!TPSplitPair(layout, role) && !TPIsPeekScene(layout, role))) return original;
     if (![scene isKindOfClass:[UIWindowScene class]] || [(UIWindowScene *)scene screen] != UIScreen.mainScreen) return original;
     CGRect result;
     return TPFrame([(UIWindowScene *)scene coordinateSpace].bounds, role, &result) ? result : original;
@@ -72,6 +100,76 @@ static CGRect TPHostFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bo
 static BOOL TPEncoding(Class cls, SEL selector, const char *expected) {
     Method method = class_getInstanceMethod(cls, selector);
     return method && method_getTypeEncoding(method) && strcmp(method_getTypeEncoding(method), expected) == 0;
+}
+
+static id TPLayoutState(id self, SEL cmd, id context) {
+    if (![NSThread isMainThread]) return TPOriginalLayoutState(self, cmd, context);
+    BOOL previous = TPBuildingPeekLayout;
+    TPBuildingPeekLayout = TPInteger(context, "requestedPeekConfiguration") == 2 &&
+                           TPInteger(context, "requestedSpaceConfiguration") == 4;
+    @try { return TPOriginalLayoutState(self, cmd, context); }
+    @finally { TPBuildingPeekLayout = previous; }
+}
+
+static NSInteger TPIvarInteger(id object, Ivar ivar) {
+    NSInteger value;
+    memcpy(&value, (const char *)(__bridge const void *)object + ivar_getOffset(ivar), sizeof(value));
+    return value;
+}
+
+static CGRect TPPeekFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bounds) {
+    CGRect original = TPOriginalPeekFrame(self, cmd, role, layout, bounds);
+    if (![NSThread isMainThread] || !TPSinglePrimary(layout, role) ||
+        object_getClass(self) != objc_getClass("SBPeekSplitViewRoutingSwitcherModifier") ||
+        TPIvarInteger(self, TPPeekConfigurationIvar) != 2 ||
+        TPIvarInteger(self, TPSpaceConfigurationIvar) != 4 ||
+        ![object_getIvar(self, TPPeekingLayoutIvar) isEqual:layout]) return original;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    CGRect viewport = scene.coordinateSpace.bounds;
+    if (!isfinite(bounds.size.width) || !isfinite(bounds.size.height) ||
+        fabs(bounds.size.width - viewport.size.width) > 0.5 || fabs(bounds.size.height - viewport.size.height) > 0.5) return original;
+    CGRect result;
+    return TPFrame(bounds, 1, &result) ? result : original;
+}
+
+static BOOL TPOwnMethod(Class cls, SEL selector) {
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    BOOL found = NO;
+    for (unsigned int i = 0; i < count; i++) if (method_getName(methods[i]) == selector) found = YES;
+    free(methods);
+    return found;
+}
+
+static void TPStartPeekPreview(void) {
+    if (!CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalPeekEnabled"), CFSTR("com.apple.springboard"), NULL)) return;
+    Class manager = objc_getClass("SBMainDisplayLayoutStateManager");
+    Class modifier = objc_getClass("SBPeekSplitViewRoutingSwitcherModifier");
+    Class context = objc_getClass("SBWorkspaceApplicationSceneTransitionContext");
+    Class state = objc_getClass("SBMainDisplayLayoutState");
+    SEL stateSelector = sel_registerName("_layoutStateForApplicationTransitionContext:");
+    SEL frameSelector = sel_registerName("frameForLayoutRole:inAppLayout:withBounds:");
+    TPPeekConfigurationIvar = class_getInstanceVariable(modifier, "_peekConfiguration");
+    TPSpaceConfigurationIvar = class_getInstanceVariable(modifier, "_spaceConfiguration");
+    TPPeekingLayoutIvar = class_getInstanceVariable(modifier, "_peekingAppLayout");
+    if (!TPEncoding(manager, stateSelector, "@24@0:8@16") || !TPOwnMethod(manager, stateSelector) ||
+        !TPEncoding(modifier, frameSelector, "{CGRect={CGPoint=dd}{CGSize=dd}}64@0:8q16@24{CGRect={CGPoint=dd}{CGSize=dd}}32") ||
+        !TPOwnMethod(modifier, frameSelector) ||
+        !TPEncoding(context, sel_registerName("requestedPeekConfiguration"), "q16@0:8") ||
+        !TPEncoding(context, sel_registerName("requestedSpaceConfiguration"), "q16@0:8") ||
+        !TPEncoding(state, sel_registerName("peekConfiguration"), "q16@0:8") ||
+        !TPEncoding(state, sel_registerName("spaceConfiguration"), "q16@0:8") ||
+        !TPPeekConfigurationIvar || !TPSpaceConfigurationIvar || !TPPeekingLayoutIvar ||
+        strcmp(ivar_getTypeEncoding(TPPeekConfigurationIvar), "q") != 0 ||
+        strcmp(ivar_getTypeEncoding(TPSpaceConfigurationIvar), "q") != 0 ||
+        strcmp(ivar_getTypeEncoding(TPPeekingLayoutIvar), "@\"SBAppLayout\"") != 0) {
+        NSLog(@"[TrollPadVertical] Peek preview disabled: runtime ABI mismatch");
+        return;
+    }
+    MSHookMessageEx(manager, stateSelector, (IMP)TPLayoutState, (IMP *)&TPOriginalLayoutState);
+    MSHookMessageEx(modifier, frameSelector, (IMP)TPPeekFrame, (IMP *)&TPOriginalPeekFrame);
+    TPPreviewEnabled = YES;
 }
 
 // Research entry point: change only the layout proposal. Scene negotiation is
@@ -125,5 +223,6 @@ void TPStartVerticalRuntime(void) {
     MSHookMessageEx(calculator, sceneSelector, (IMP)TPSceneFrame, (IMP *)&TPOriginalSceneFrame);
     MSHookMessageEx(modifier, hostSelector, (IMP)TPHostFrame, (IMP *)&TPOriginalHostFrame);
     TPRuntimeInstalled = YES;
+    TPStartPeekPreview();
     NSLog(@"[TrollPadVertical] Experimental fixed 50:50 layout installed for 20B101");
 }
