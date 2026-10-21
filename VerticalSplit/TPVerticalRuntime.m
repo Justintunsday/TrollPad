@@ -11,6 +11,16 @@
 
 static CGRect (*TPOriginalSceneFrame)(id, SEL, NSInteger, id, NSInteger, id);
 static CGRect (*TPOriginalHostFrame)(id, SEL, NSInteger, id, CGRect);
+static BOOL TPRuntimeInstalled;
+static double TPDividerRatio = 0.5;
+
+@interface NSObject (TPVerticalTransaction)
+- (instancetype)initWithApplicationSceneHandle:(id)handle;
+- (BOOL)requestTransitionWithBuilder:(void (^)(id request))builder;
+- (id)applicationContext;
+- (void)setEntity:(id)entity forLayoutRole:(NSInteger)role;
+- (void)setRequestedSpaceConfiguration:(NSInteger)configuration;
+@end
 
 static id TPObject(id object, const char *name) {
     SEL selector = sel_registerName(name);
@@ -39,7 +49,7 @@ static BOOL TPFrame(CGRect viewport, NSInteger role, CGRect *result) {
     if (viewport.size.height <= viewport.size.width) return NO;
     TPVerticalLayout layout;
     TPRect rect = {viewport.origin.x, viewport.origin.y, viewport.size.width, viewport.size.height};
-    if (!TPComputeVerticalLayout(rect, rect.y + rect.height / 2, 2, 151, 1, &layout)) return NO;
+    if (!TPComputeVerticalLayout(rect, rect.y + rect.height * TPDividerRatio, 2, 151, 1, &layout)) return NO;
     TPRect pane = role == 1 ? layout.upper : layout.lower;
     *result = CGRectMake(pane.x, pane.y, pane.width, pane.height);
     return YES;
@@ -70,6 +80,62 @@ static BOOL TPEncoding(Class cls, SEL selector, const char *expected) {
     return method && method_getTypeEncoding(method) && strcmp(method_getTypeEncoding(method), expected) == 0;
 }
 
+// Research entry point only. No gesture calls this until the transaction has
+// been verified on device. All entities wrap existing live scene handles.
+@interface TPVerticalResearch : NSObject
++ (double)dividerRatio;
++ (BOOL)requestRatio:(double)ratio primaryHandle:(id)primary secondaryHandle:(id)secondary;
+@end
+
+@implementation TPVerticalResearch
++ (double)dividerRatio { return TPDividerRatio; }
++ (BOOL)requestRatio:(double)ratio primaryHandle:(id)primary secondaryHandle:(id)secondary {
+    if (!TPRuntimeInstalled || ![NSThread isMainThread] || !isfinite(ratio)) return NO;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return NO;
+    Class handleClass = objc_getClass("SBDeviceApplicationSceneHandle");
+    if (![primary isKindOfClass:handleClass] || ![secondary isKindOfClass:handleClass] || primary == secondary) return NO;
+    if (!TPEncoding(handleClass, sel_registerName("isEffectivelyForeground"), "B16@0:8") ||
+        !TPEncoding(handleClass, sel_registerName("layoutRole"), "q16@0:8")) return NO;
+    SEL foreground = sel_registerName("isEffectivelyForeground");
+    SEL roleSelector = sel_registerName("layoutRole");
+    if (!((BOOL (*)(id, SEL))objc_msgSend)(primary, foreground) ||
+        !((BOOL (*)(id, SEL))objc_msgSend)(secondary, foreground) ||
+        ((NSInteger (*)(id, SEL))objc_msgSend)(primary, roleSelector) != 1 ||
+        ((NSInteger (*)(id, SEL))objc_msgSend)(secondary, roleSelector) != 2) return NO;
+    id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
+    id state = TPObject(coordinator, "layoutState");
+    if (!TPSplitPair(TPObject(state, "appLayout"), 1)) return NO;
+    Class entityClass = objc_getClass("SBDeviceApplicationSceneEntity");
+    Class contextClass = objc_getClass("SBWorkspaceApplicationSceneTransitionContext");
+    Class requestClass = objc_getClass("SBMainWorkspaceTransitionRequest");
+    Class workspaceClass = objc_getClass("SBMainWorkspace");
+    if (!TPEncoding(entityClass, @selector(initWithApplicationSceneHandle:), "@24@0:8@16") ||
+        !TPEncoding(contextClass, @selector(setEntity:forLayoutRole:), "v32@0:8@16q24") ||
+        !TPEncoding(contextClass, @selector(setRequestedSpaceConfiguration:), "v24@0:8q16") ||
+        !TPEncoding(requestClass, @selector(applicationContext), "@16@0:8") ||
+        !TPEncoding(workspaceClass, @selector(requestTransitionWithBuilder:), "B24@0:8@?16") ||
+        !TPEncoding(object_getClass(state), sel_registerName("spaceConfiguration"), "q16@0:8")) return NO;
+    id first = [[entityClass alloc] initWithApplicationSceneHandle:primary];
+    id second = [[entityClass alloc] initWithApplicationSceneHandle:secondary];
+    if (!first || !second) return NO;
+    NSInteger configuration = ((NSInteger (*)(id, SEL))objc_msgSend)(state, sel_registerName("spaceConfiguration"));
+    id workspace = TPObject((id)workspaceClass, "sharedInstanceIfExists");
+    double previous = TPDividerRatio;
+    TPDividerRatio = fmax(1.0 / 3, fmin(ratio, 2.0 / 3));
+    // Compiler-generated ARC Block: do not inject a manually constructed Block.
+    BOOL accepted = [workspace requestTransitionWithBuilder:^(id request) {
+        id context = [request applicationContext];
+        [context setEntity:first forLayoutRole:1];
+        [context setEntity:second forLayoutRole:2];
+        [context setRequestedSpaceConfiguration:configuration];
+    }];
+    if (!accepted) TPDividerRatio = previous;
+    NSLog(@"[TrollPadVertical] Research ratio %.4f transaction accepted=%d", TPDividerRatio, accepted);
+    return accepted;
+}
+@end
+
 void TPStartVerticalRuntime(void) {
     static BOOL attempted;
     if (attempted) return;
@@ -99,5 +165,6 @@ void TPStartVerticalRuntime(void) {
     }
     MSHookMessageEx(calculator, sceneSelector, (IMP)TPSceneFrame, (IMP *)&TPOriginalSceneFrame);
     MSHookMessageEx(modifier, hostSelector, (IMP)TPHostFrame, (IMP *)&TPOriginalHostFrame);
+    TPRuntimeInstalled = YES;
     NSLog(@"[TrollPadVertical] Experimental fixed 50:50 layout installed for 20B101");
 }

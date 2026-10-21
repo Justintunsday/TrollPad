@@ -1,6 +1,6 @@
 Package: com.kdt.trollpad
 Name: TrollPad
-Version: 1.3.1~vertical4
+Version: 1.3.1~vertical5
 Architecture: iphoneos-arm64
 Description: TrollPad with opt-in experimental fixed vertical split for iOS 16.1.1. Interactive divider resizing remains under development.
 Maintainer: khanhduytran0
