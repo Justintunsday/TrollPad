@@ -8,7 +8,7 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = TrollPadSB TrollPadUI
 
-TrollPadSB_FILES = TweakSB.x TrollPadPrefs/NSUserDefaults+hook.x TPPrefsObserver.m VerticalSplit/TPVerticalDiagnostics.m VerticalSplit/TPVerticalGeometry.c
+TrollPadSB_FILES = TweakSB.x TrollPadPrefs/NSUserDefaults+hook.x TPPrefsObserver.m VerticalSplit/TPVerticalDiagnostics.m VerticalSplit/TPVerticalRuntime.m VerticalSplit/TPVerticalGeometry.c
 TrollPadSB_CFLAGS = -fobjc-arc
 TrollPadSB_LIBRARIES = MobileGestalt
 TrollPadSB_FRAMEWORKS = UIKit Foundation CoreFoundation

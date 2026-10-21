@@ -10,7 +10,7 @@
 			<key>label</key>
 			<string>上下分屏研究</string>
 			<key>footerText</key>
-			<string>采集兼容性信息，不会启用上下布局。打开后生成诊断报告；关闭再打开可刷新。</string>
+			<string>固定上下布局仅限已验证的 iOS 16.1.1，默认关闭，修改后需重启 SpringBoard。暂不支持拖动比例。诊断开关独立生成兼容性报告。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -25,6 +25,24 @@
 			<string>上下分屏诊断</string>
 			<key>PostNotification</key>
 			<string>com.kdt.trollpad.vertical-diagnostics</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>实验性固定 50:50</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.apple.springboard</string>
+			<key>key</key>
+			<string>TPVerticalSplitEnabled</string>
+			<key>label</key>
+			<string>启用上下分屏（需重启桌面）</string>
 		</dict>
 		<dict>
 			<key>cell</key>

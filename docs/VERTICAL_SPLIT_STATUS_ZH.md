@@ -1,61 +1,41 @@
 # TrollPad 上下分屏开发状态
 
-以用户指定的 Justintunsday/TrollPad 为底包，基线提交
-`3a841b3aa26d96df2acbcdb129dcfddf69a62b06`。新增模块直接编入 TrollPadSB，
-复用原有 Medusa、Dock、设置和应用侧 Hook；不另装一套多任务能力 Hook。
+以 Justintunsday/TrollPad 为底包，基线提交 `3a841b3aa26d96df2acbcdb129dcfddf69a62b06`。新增代码编入 TrollPadSB，复用底包的 Medusa、Dock 和应用侧能力。商业 DEB、反汇编、设备隐私报告不进入仓库。
 
-## 已完成的离线开发
+## 已取得的证据
 
-- 独立 C 几何：接受宿主坐标下的有效区域（含非零原点），计算上下窗格。
-- 支持分隔间隙、最小高度、1/3～2/3 限制、非法输入与横屏退回；失败不改写输出。
-- 历史 role=2 允许全宽正请求，role=1 要求小于屏宽；另拒绝负值和非有限值。
-  这是旧版证据模型，不代表 iOS16 的角色已确定。
-- 设置新增默认关闭的“上下分屏诊断”，读取类、方法完整编码、返回与参数类型、
-  是否直接实现、系统版本、编译架构，生成 JSON。不会安装新的布局 Hook。
-- GitHub Actions：macOS/Xcode + Theos + iOS16.5 SDK，运行 C 测试、
-  构建 Rootless arm64/arm64e 包，保存日志和 SHA256。
+- 独立 C 几何通过 17,560 组窗格测试，涵盖非零原点、间隙、最小高度、1/3～2/3 限制、非法输入和横屏退回。
+- vertical1、vertical2 经 GitHub Actions/macOS 编译，通过 Rootless 包检查，包含 arm64 和 arm64e。
+- 已经用户授权，通过 SSH 在 iPhone SE 2（iPhone12,8）、iOS 16.1.1（20B101）、Dopamine/ElleKit 上进行受控实验。
+- 旧版 `SBMainDisplaySceneLayoutViewController` 在目标系统不存在。实际 Scene 布局入口为 `SBDisplayItemLayoutAttributesCalculator` 的 `frameForLayoutRole:inAppLayout:containerOrientation:windowScene:`。
+- 宿主布局另经 `SBSwitcherModifier` 的 `frameForLayoutRole:inAppLayout:withBounds:`。实际目标接收者为 `SBSplitViewRootSwitcherModifier`；它继承此方法。仅改变 Scene 计算器不足以同步宿主。
+- 通过原生 Split View UIAction 创建 Calculator + Settings 双 App，实际布局有两个 item、role 1 和 2、spaceConfiguration 4；没有手工构造 scene ID 或持久化布局。
+- 临时双 Hook 实验获得两个真实前台 Scene 和宿主一致的竖屏区域：375×332.5，第二窗格 y=334.5。Calculator 客户端 UIWindow 也收到 375×332.5 的 bounds。
+- 本项目明确将此设备上观察到的 role 1 映射到上方、role 2 到下方；不沿用旧二进制的上下角色假设。
 
-## 证据矩阵
+## vertical3 实现与限制
 
-| 项目 | 参考证据 | 实现状态 | 缺少的目标设备证据 |
-|---|---|---|---|
-| 上下角色 | 旧版 ARM64 0x9fb4，role 2 上、role 1 下 | 独立几何和历史守卫模型 | iOS16 实际角色、App Scene、调用链 |
-| 拖动范围 | 旧版 0x9cf4–0x9d40 | 约束数学已实现 | 手势到两个 Scene 的真实提交 |
-| 刷新 | 旧版 0x9ef0 后调用切换器函数 | 不复制旧刷新机制 | iOS16 scene invalidation 入口 |
-| 双 App | TrollPad 原有 Medusa/切换器代码 | 复用底包 | 并存、触控、退出的真机验证 |
-| ABI | 旧版 CGRect/CGSize 与整数参数 | 完整分项元数据比较 | iOS16.1.1 签名、arm64e ABI、真实调用路径 |
-| 安全区/键盘 | 不可直接使用旧版常数 | 几何接受外部有效区域 | 宿主 bounds、安全区及键盘占用 |
+新增默认关闭的 `TPVerticalSplitEnabled` 设置，启动 SpringBoard 时读取。只允许系统 build 20B101，并完整比对两个方法的 Objective-C 类型编码；不匹配则不安装布局 Hook。宿主 Hook 先给目标子类增加自有方法，避免修改继承的基类方法。两个 Hook 先调用原实现，非主线程、非双 App、非主屏、非竖屏或不匹配的 bounds 均退回。
 
-元数据类型匹配不足以证明 Hook 安全。本包未启用新的竖屏布局 Hook；
-TrollPad 原有 Hook 仍按底包行为运行。此包不是已经完成的上下双 App 插件。
+固定布局使用独立几何模块，间隙 2 pt，最小窗格高度 151 pt，比例 50:50。本次封装的编译、安装和用户触控验证需另行记录；此前临时 Frida 实验成功不等于安装包验证完成。
 
-## 下一步所需的最小真机资料
+**尚未完成：** 拖动手势与实时 Scene 提交、键盘占用、旋转与锁屏生命周期、全面的触控路由和退出验证。不能视为完成版 FloatingDockPlus 移植。
 
-由用户在有恢复条件的测试设备执行；本次开发不自动 SSH、安装或重启手机。
+一次尝试通过 Frida 创建 Block 调用 `requestTransitionWithBuilder:` 刷新比例导致 SpringBoard EXC_BAD_ACCESS，崩溃提示可能涉及 pointer authentication。确切原因尚未证实。该刷新机制没有进入本源码，不再重复执行。后续应验证原生编译的事务路径及其语义。
 
-1. 确认 iOS16.1.1（20B101），记录型号、Dopamine 和 ElleKit 版本。
-2. 包加载后在 设置 → TrollPad → 上下分屏研究 打开“上下分屏诊断”。
-3. 取回 `/var/mobile/Library/Logs/TrollPad/vertical-runtime.json`。
-   实际路径根据 SpringBoard home 生成，并输出在 `[TrollPadVertical]` 日志中。
-4. 关闭再打开诊断可刷新报告，无需为此诊断功能额外重启。
-5. 记录现有 TrollPad 是否能同时运行两个 App，以及横竖屏和退出行为。
+## 设置和恢复
 
-报告只读取元数据，不提供角色实参、调用栈或实时 Scene frame；
-这些需要下一阶段受控观察，不能仅凭 JSON 开放布局 Hook。
+- “上下分屏诊断”只输出只读元数据，可关闭再打开刷新，报告为 SpringBoard home 下 `Library/Logs/TrollPad/vertical-runtime.json`。
+- “启用上下分屏”默认关闭，修改后重启 SpringBoard；此版本没有比例拖动功能。进入原生双 App Split View 后才改变几何。
+- 测试前保留 SSH、安装包和独立定时恢复。用户当前重新安装了 vertical2，以其当前可用状态为测试基线；不得按最初“未安装”状态擅自卸载。
+- 恢复时关闭 `com.apple.springboard` 域 `TPVerticalSplitEnabled`，重启 SpringBoard。必要时恢复已验证的 vertical2 包。
 
-## 复现构建
+## 构建
 
-```sh
-python3 scripts/run_tests.py
-export THEOS=/absolute/path/to/theos
-gmake clean
-gmake package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless
+GitHub Actions 使用 macOS/Xcode、Theos、iOS16.5 SDK 构建，保存日志与 SHA256。Windows 几何测试：
+
+```powershell
+python scripts/run_tests.py --cc C:\path\zig.exe cc
 ```
 
-Windows 支持 `python scripts/run_tests.py --cc C:\path\zig.exe cc`。
-arm64e 使用 macOS/Xcode 构建。保留底包 iOS15 部署下限，研究目标为 iOS16.1.1。
-GitHub 输出构建通过也不意味着真机分屏已可用。
-
-参考：[TrollPad 底包](https://github.com/Justintunsday/TrollPad)、
-[Theos Rootless 文档](https://theos.dev/docs/rootless)。
-商业 DEB、反汇编、历史 ZIP 均不进入此仓库或 Actions 产物。
+Rootless 编译：`gmake package FINALPACKAGE=1 THEOS_PACKAGE_SCHEME=rootless`。编译成功只代表构建通过，不能替代设备验证。

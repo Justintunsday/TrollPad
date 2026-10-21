@@ -64,9 +64,18 @@ static NSDictionary *TPDescribeMethod(Class cls, NSString *name) {
         [arguments[3] isEqualToString:@(@encode(NSInteger))] &&
         [arguments[4] isEqualToString:@(@encode(NSInteger))] &&
         [arguments[5] isEqualToString:@(@encode(NSUInteger))];
+    BOOL calculatorShape = arguments.count == 6 &&
+        [resultType isEqualToString:@(@encode(CGRect))] &&
+        [arguments[0] isEqualToString:@(@encode(id))] &&
+        [arguments[1] isEqualToString:@(@encode(SEL))] &&
+        [arguments[2] isEqualToString:@(@encode(NSInteger))] &&
+        [arguments[3] isEqualToString:@(@encode(id))] &&
+        [arguments[4] isEqualToString:@(@encode(NSInteger))] &&
+        [arguments[5] isEqualToString:@(@encode(id))];
     return @{@"selector": name, @"present": @YES, @"directImplementation": @(direct),
              @"encoding": encoding ? @(encoding) : @"?", @"returnType": resultType,
-             @"arguments": arguments, @"matchesLocalLegacyShape": @(layoutShape)};
+             @"arguments": arguments, @"matchesLocalLegacyShape": @(layoutShape),
+             @"matchesLocalIOS16CalculatorShape": @(calculatorShape)};
 }
 
 static void TPWriteRuntimeReport(void) {
@@ -75,6 +84,13 @@ static void TPWriteRuntimeReport(void) {
             @"viewDidLoad", @"_layoutFrameForSize:withRole:inInterfaceOrientation:frameOptions:",
             @"_setSeparatorViewAlpha:", @"_shouldNubViewBeVisibleForLayoutRole:inLayoutState:"],
         @"SBMainSwitcherControllerCoordinator": @[@"_loadContentViewControllerIfNecessaryForWindowScene:"],
+        @"SBSwitcherController": @[
+            @"frameForItemWithRole:inMainAppLayout:interfaceOrientation:",
+            @"sceneEntityFrameForWorkspaceEntity:inLayoutState:", @"layoutState"],
+        @"SBDisplayItemLayoutAttributesCalculator": @[
+            @"frameForLayoutRole:inAppLayout:containerOrientation:windowScene:"],
+        @"SBFluidSwitcherViewController": @[
+            @"_frameForItemWithRole:inMainAppLayout:interfaceOrientation:"],
         @"SBMainWorkspace": @[@"isMedusaEnabled"],
         @"SBPlatformController": @[@"medusaCapabilities"],
         @"SBApplication": @[@"isMedusaCapable", @"mainSceneWantsFullscreen"]
@@ -96,7 +112,7 @@ static void TPWriteRuntimeReport(void) {
     NSString *architecture = @"other";
 #endif
     NSDictionary *report = @{
-        @"schemaVersion": @1, @"timestamp": @([[NSDate date] timeIntervalSince1970]),
+        @"schemaVersion": @2, @"timestamp": @([[NSDate date] timeIntervalSince1970]),
         @"osVersion": NSProcessInfo.processInfo.operatingSystemVersionString,
         @"architecture": architecture, @"layoutHooksInstalled": @NO,
         @"verticalBackendVerified": @NO, @"classes": classes,
