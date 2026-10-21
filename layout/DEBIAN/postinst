@@ -13,7 +13,8 @@ case "$1" in
         [ -e "$source" ] || continue
         name=${source##*/}
         [ "$name" = Info.plist ] && continue
-        ln -sf "$source" "$bundle_jb/$name"
+        # -n prevents following an existing directory symlink on upgrade.
+        ln -sfn "$source" "$bundle_jb/$name"
       done
       # Do not follow an old symlink into the read-only system bundle.
       rm -f "$bundle_jb/Info.plist"
