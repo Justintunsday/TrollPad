@@ -1,0 +1,257 @@
+#import "TPVerticalRuntime.h"
+#import <QuartzCore/QuartzCore.h>
+#import <objc/runtime.h>
+#import <objc/message.h>
+#import <substrate.h>
+#include <string.h>
+#include <stdlib.h>
+#include <math.h>
+
+@protocol TPDividerActions <NSObject>
+- (void)adjustRatioBy:(double)delta;
+@end
+
+@interface TPVerticalGrabber : UIView
+@property(nonatomic, weak) id<TPDividerActions> actions;
+@end
+@implementation TPVerticalGrabber
+- (void)accessibilityIncrement { [self.actions adjustRatioBy:0.05]; }
+- (void)accessibilityDecrement { [self.actions adjustRatioBy:-0.05]; }
+@end
+
+@interface TPVerticalDividerWindow : UIWindow
+@property(nonatomic, weak) UIView *grabber;
+@end
+@implementation TPVerticalDividerWindow
+- (BOOL)_usesWindowServerHitTesting { return NO; }
+- (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
+    // Visual only: the existing system resize recognizer receives the input.
+    return NO;
+}
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    return [self pointInside:point withEvent:event] ? [super hitTest:point withEvent:event] : nil;
+}
+@end
+
+@interface TPVerticalDividerController : NSObject <TPDividerActions> {
+    CGRect _viewport;
+    TPVerticalLayout _layout;
+    double _previewY;
+    double _proposedY;
+}
+@property(nonatomic, strong) TPVerticalDividerWindow *window;
+@property(nonatomic, strong) TPVerticalGrabber *grabber;
+@property(nonatomic, weak) UIPanGestureRecognizer *nativeGesture;
+@property(nonatomic, strong) NSTimer *timer;
+@property(nonatomic) BOOL tracking;
+@property(nonatomic) BOOL busy;
+- (BOOL)canReceiveNativeTouch:(UITouch *)touch;
+- (void)handlePan:(UIPanGestureRecognizer *)gesture;
+@end
+
+static TPVerticalDividerController *TPDividerController;
+static BOOL (*TPOriginalReceiveTouch)(id, SEL, id, UITouch *);
+static BOOL (*TPOriginalShouldBegin)(id, SEL, id);
+static void (*TPOriginalFluidGesture)(id, SEL, id);
+
+static BOOL TPIsNativeResize(id manager, id gesture) {
+    return gesture && gesture == ((id (*)(id, SEL))objc_msgSend)(manager, sel_registerName("sceneResizePanGestureRecognizer"));
+}
+
+static BOOL TPNativeReceiveTouch(id self, SEL cmd, id gesture, UITouch *touch) {
+    TPVerticalLayout layout;
+    if ([NSThread isMainThread] && TPIsNativeResize(self, gesture) && TPCopyActiveVerticalLayout(&layout)) {
+        if (gesture == TPDividerController.nativeGesture && [(UIGestureRecognizer *)gesture numberOfTouches] > 0) return NO;
+        BOOL accepts = [TPDividerController canReceiveNativeTouch:touch];
+        TPDividerController.nativeGesture = accepts ? gesture : nil;
+        return accepts;
+    }
+    return TPOriginalReceiveTouch(self, cmd, gesture, touch);
+}
+
+static BOOL TPNativeShouldBegin(id self, SEL cmd, id gesture) {
+    if ([NSThread isMainThread] && gesture == TPDividerController.nativeGesture) {
+        TPVerticalLayout layout;
+        return !TPVerticalKeyboardVisible() && TPCopyActiveVerticalLayout(&layout);
+    }
+    return TPOriginalShouldBegin(self, cmd, gesture);
+}
+
+static void TPNativeFluidGesture(id self, SEL cmd, UIPanGestureRecognizer *gesture) {
+    if ([NSThread isMainThread] && gesture == TPDividerController.nativeGesture) {
+        // Do not start the system's horizontal scene-resize transaction as well.
+        [TPDividerController handlePan:gesture];
+        if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) TPDividerController.nativeGesture = nil;
+        return;
+    }
+    TPOriginalFluidGesture(self, cmd, gesture);
+}
+
+static BOOL TPDividerOwnEncoding(Class cls, SEL selector, const char *types) {
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    BOOL found = NO;
+    for (unsigned int i = 0; i < count; i++) {
+        if (method_getName(methods[i]) == selector && strcmp(method_getTypeEncoding(methods[i]), types) == 0) found = YES;
+    }
+    free(methods);
+    return found;
+}
+
+@implementation TPVerticalDividerController
+- (instancetype)init {
+    if ((self = [super init])) {
+        self.timer = [NSTimer timerWithTimeInterval:0.25 target:self selector:@selector(refresh) userInfo:nil repeats:YES];
+        [NSRunLoop.mainRunLoop addTimer:self.timer forMode:NSRunLoopCommonModes];
+        [self refresh];
+    }
+    return self;
+}
+
+- (void)createWindowForScene:(UIWindowScene *)scene {
+    self.window.hidden = YES;
+    self.window = [[TPVerticalDividerWindow alloc] initWithWindowScene:scene];
+    // A server-hit-tested window must only cover the actual control. A full
+    // screen window would prevent other processes from receiving their touches.
+    self.window.frame = CGRectMake(0, 0, 96, 36);
+    self.window.backgroundColor = UIColor.clearColor;
+    self.window.opaque = NO;
+    self.window.userInteractionEnabled = NO;
+    self.window.windowLevel = UIWindowLevelStatusBar + 1;
+    UIViewController *root = [UIViewController new];
+    root.view = [[UIView alloc] initWithFrame:self.window.bounds];
+    root.view.backgroundColor = UIColor.clearColor;
+    self.window.rootViewController = root;
+    self.grabber = [[TPVerticalGrabber alloc] initWithFrame:CGRectMake(0, 0, 96, 36)];
+    self.grabber.backgroundColor = UIColor.clearColor;
+    self.grabber.actions = self;
+    self.grabber.isAccessibilityElement = YES;
+    self.grabber.accessibilityTraits = UIAccessibilityTraitAdjustable;
+    self.grabber.accessibilityLabel = @"分屏分隔条";
+    self.grabber.accessibilityHint = @"上下拖动，松手调整两边大小";
+    UIView *pill = [[UIView alloc] initWithFrame:CGRectMake(8, 13, 80, 10)];
+    pill.backgroundColor = UIColor.darkGrayColor;
+    pill.layer.cornerRadius = 5;
+    pill.layer.shadowColor = UIColor.blackColor.CGColor;
+    pill.layer.shadowOpacity = 0.2;
+    pill.layer.shadowRadius = 2;
+    pill.layer.shadowOffset = CGSizeMake(0, 1);
+    pill.userInteractionEnabled = NO;
+    [self.grabber addSubview:pill];
+    [root.view addSubview:self.grabber];
+    self.window.grabber = self.grabber;
+    // Never make this window key or register a second pan recognizer.
+}
+
+- (void)positionGrabberAtY:(double)y {
+    self.window.frame = CGRectMake(_viewport.origin.x + (_viewport.size.width - 96) / 2, y - 18, 96, 36);
+    self.grabber.frame = self.window.bounds;
+}
+
+- (void)refresh {
+    TPVerticalLayout layout;
+    UIWindowScene *scene = TPVerticalWindowScene();
+    // SpringBoard can receive a show notification without the matching app-side
+    // hide notification. Query current state rather than latching a stale flag.
+    BOOL valid = scene && !TPVerticalKeyboardVisible() && TPCopyActiveVerticalLayout(&layout);
+    if (!valid) {
+        self.window.hidden = YES;
+        self.tracking = NO;
+        return;
+    }
+    CGRect viewport = scene.coordinateSpace.bounds;
+    if (self.tracking && !CGRectEqualToRect(viewport, _viewport)) {
+        self.tracking = NO;
+    }
+    _viewport = viewport;
+    _layout = layout;
+    if (!self.window || self.window.windowScene != scene) [self createWindowForScene:scene];
+    self.window.hidden = NO;
+    if (!self.tracking) [self positionGrabberAtY:layout.dividerY];
+    self.grabber.accessibilityValue = [NSString stringWithFormat:@"上方约 %.0f%%", 100 * layout.upper.height / (layout.upper.height + layout.lower.height)];
+}
+
+- (BOOL)commitRatio:(double)ratio {
+    if (self.busy || TPVerticalKeyboardVisible() || !isfinite(ratio)) return NO;
+    BOOL accepted = TPResizeVerticalSplit(ratio);
+    if (accepted) {
+        self.busy = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            self.busy = NO;
+            [self refresh];
+        });
+    }
+    return accepted;
+}
+
+- (void)handlePan:(UIPanGestureRecognizer *)gesture {
+    if (gesture.state == UIGestureRecognizerStateBegan) {
+        TPVerticalLayout current;
+        if (self.busy || !TPCopyActiveVerticalLayout(&current)) { self.tracking = NO; return; }
+        self.tracking = YES;
+        _previewY = current.dividerY;
+        _proposedY = current.dividerY;
+    }
+    if (gesture.state == UIGestureRecognizerStateBegan || gesture.state == UIGestureRecognizerStateChanged || gesture.state == UIGestureRecognizerStateEnded) {
+        if (!self.tracking) return;
+        CGPoint translation = [gesture translationInView:gesture.view];
+        TPRect viewport = {_viewport.origin.x, _viewport.origin.y, _viewport.size.width, _viewport.size.height};
+        TPVerticalLayout preview;
+        TPVerticalLayout continuous;
+        double step = self.window.screen.scale == 2 ? 0.5 : 1.0;
+        // Preserve sub-grid finger movement; round only the displayed proposal.
+        if (TPComputeVerticalLayout(viewport, _proposedY + translation.y, 2, 151, 1, &continuous)) _proposedY = continuous.dividerY;
+        if (TPComputeAlignedVerticalLayout(viewport, _proposedY, 2, 151, 1, step, &preview)) {
+            _previewY = preview.dividerY;
+            [self positionGrabberAtY:_previewY];
+        }
+        [gesture setTranslation:CGPointZero inView:gesture.view];
+        if (gesture.state == UIGestureRecognizerStateEnded) {
+            self.tracking = NO;
+            [self commitRatio:(_previewY - _viewport.origin.y) / _viewport.size.height];
+            [self refresh];
+        }
+    } else if (gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
+        self.tracking = NO;
+        [self refresh];
+    }
+}
+
+- (BOOL)canReceiveNativeTouch:(UITouch *)touch {
+    if (self.busy || self.window.hidden || !touch || TPVerticalKeyboardVisible()) return NO;
+    // System touches originate in _UIScreenBasedWindowScene, not SBWindowScene.
+    // On 20B101, asking UITouch to reproject into our window doubles the point
+    // before subtracting the window origin. Compare both in screen coordinates.
+    CGPoint point = [touch locationInView:nil];
+    CGRect screenGrip = [self.window convertRect:self.window.bounds toWindow:nil];
+    return isfinite(point.x) && isfinite(point.y) && CGRectContainsPoint(screenGrip, point);
+}
+
+- (void)adjustRatioBy:(double)delta {
+    TPVerticalLayout current;
+    if (!TPCopyActiveVerticalLayout(&current)) return;
+    CGRect viewport = TPVerticalWindowScene().coordinateSpace.bounds;
+    [self commitRatio:(current.dividerY - viewport.origin.y) / viewport.size.height + delta];
+    [self refresh];
+}
+@end
+
+void TPStartVerticalDivider(void) {
+    if (TPDividerController) return;
+    Class cls = objc_getClass("SBFluidSwitcherGestureManager");
+    SEL receive = sel_registerName("gestureRecognizer:shouldReceiveTouch:");
+    SEL begin = sel_registerName("gestureRecognizerShouldBegin:");
+    SEL handle = sel_registerName("_handleFluidGesture:");
+    SEL getter = sel_registerName("sceneResizePanGestureRecognizer");
+    if (!TPDividerOwnEncoding(cls, receive, "B32@0:8@16@24") ||
+        !TPDividerOwnEncoding(cls, begin, "B24@0:8@16") ||
+        !TPDividerOwnEncoding(cls, handle, "v24@0:8@16") ||
+        !TPDividerOwnEncoding(cls, getter, "@16@0:8")) {
+        NSLog(@"[TrollPadVertical] Native divider disabled: gesture ABI mismatch");
+        return;
+    }
+    TPDividerController = [TPVerticalDividerController new];
+    MSHookMessageEx(cls, receive, (IMP)TPNativeReceiveTouch, (IMP *)&TPOriginalReceiveTouch);
+    MSHookMessageEx(cls, begin, (IMP)TPNativeShouldBegin, (IMP *)&TPOriginalShouldBegin);
+    MSHookMessageEx(cls, handle, (IMP)TPNativeFluidGesture, (IMP *)&TPOriginalFluidGesture);
+}

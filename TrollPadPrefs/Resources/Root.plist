@@ -8,6 +8,102 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
+			<string>上下分屏研究</string>
+			<key>footerText</key>
+			<string>上下布局仅限已验证的 iOS 16.1.1，默认关闭，修改后需重启 SpringBoard。可拖动分隔条，松手后调整两边大小；范围约为 1/3～2/3。诊断开关独立生成兼容性报告。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.apple.springboard</string>
+			<key>key</key>
+			<string>TPVerticalDiagnosticsEnabled</string>
+			<key>label</key>
+			<string>上下分屏诊断</string>
+			<key>PostNotification</key>
+			<string>com.kdt.trollpad.vertical-diagnostics</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>实验性上下分屏</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.apple.springboard</string>
+			<key>key</key>
+			<string>TPVerticalSplitEnabled</string>
+			<key>label</key>
+			<string>启用上下分屏（需重启桌面）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>分隔条</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.apple.springboard</string>
+			<key>key</key>
+			<string>TPVerticalDividerEnabled</string>
+			<key>label</key>
+			<string>显示可拖动分隔条（需重启桌面）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>App 多任务按钮</string>
+			<key>footerText</key>
+			<string>隐藏 App 顶部三点按钮并关闭其点击区域，适用于全屏、分屏及横竖屏。关闭此开关并重启桌面可恢复按钮。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.apple.springboard</string>
+			<key>key</key>
+			<string>TPHideNativeAffordanceEnabled</string>
+			<key>label</key>
+			<string>完全隐藏 App 三点按钮（需重启桌面）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>过渡布局研究</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.apple.springboard</string>
+			<key>key</key>
+			<string>TPVerticalPeekEnabled</string>
+			<key>label</key>
+			<string>上下选择预览（实验，需重启桌面）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
 			<string>Stage Manager</string>
 		</dict>
 		<dict>
@@ -64,15 +160,15 @@
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>default</key>
-			<real>1</real>
+			<real>1.0</real>
 			<key>defaults</key>
 			<string>com.apple.springboard</string>
 			<key>key</key>
 			<string>SBExtendedDisplayContentsScaleAndDontFileRadars</string>
 			<key>max</key>
-			<real>3</real>
+			<real>3.0</real>
 			<key>min</key>
-			<real>1</real>
+			<real>1.0</real>
 			<key>showValue</key>
 			<true/>
 		</dict>

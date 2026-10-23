@@ -1,4 +1,5 @@
 ARCHS := arm64 arm64e
+THEOS_PACKAGE_SCHEME ?= rootless
 TARGET := iphone:clang:16.5:15.0
 INSTALL_TARGET_PROCESSES = SpringBoard
 
@@ -7,9 +8,10 @@ include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = TrollPadSB TrollPadUI
 
-TrollPadSB_FILES = TweakSB.x TrollPadPrefs/NSUserDefaults+hook.x TPPrefsObserver.m
+TrollPadSB_FILES = TweakSB.x TrollPadPrefs/NSUserDefaults+hook.x TPPrefsObserver.m VerticalSplit/TPVerticalDiagnostics.m VerticalSplit/TPVerticalRuntime.m VerticalSplit/TPVerticalDivider.m VerticalSplit/TPVerticalGeometry.c VerticalSplit/TPNativeAffordance.m
 TrollPadSB_CFLAGS = -fobjc-arc
 TrollPadSB_LIBRARIES = MobileGestalt
+TrollPadSB_FRAMEWORKS = UIKit Foundation CoreFoundation QuartzCore
 # TrollPad_PRIVATE_FRAMEWORKS = BoardServices SpringBoard
 
 TrollPadUI_FILES = TweakUI.x
