@@ -10,6 +10,14 @@
 
 ## iOS 16 当前问题
 
+2026-10-23 用户要求暂停可移动分隔条，优先修复动画。设备已关闭 `TPVerticalDividerEnabled` 和尺寸研究开关，保留上下分屏及三点按钮隐藏；vertical15 未安装。
+
+实测发现第二 App 选择器不只有 `peekConfiguration=2 / spaceConfiguration=4`：从另一侧 App 进入时还出现 `peekConfiguration=3 / spaceConfiguration=2`。旧预览 Hook 没覆盖此状态，显示宿主仍为 45×667 的侧边窄条，Scene 却为 375×332.5，形成几何不一致。vertical16 构建并安装后，主侧预览 Scene/宿主均为上方 375×332.5；另一侧宿主已在下方，但 Scene 仍在上方，不能算通过。
+
+进一步读取到 Scene 计算期间存在真实 App 与系统 `PeekPlacholderItem` 组成的临时双项布局，它不能等同于两个真实 App。vertical17 为该布局映射真实 App 的预览角色，并覆盖 `SBFullScreenToPeekSwitcherModifier` 中匹配的真实 App 宿主帧。类自有方法、完整 ABI 和 ivar 类型均验证后才安装，保留原生动画时序。不修改普通单 App 或多任务卡片的 `frameForIndex:`。用户确认建立分屏与双击 Home 返回均有问题；这两条动画路径都需要验证，不能由静态几何一致推导视觉动画已经修复。
+
+vertical17 已通过 Actions `39958196047` 构建、Rootless arm64/arm64e 包检查并安装。主侧预览 Scene/宿主均为 `(0,0,375,332.5)`；另一侧预览均为 `(0,334.5,375,332.5)`，修复 vertical16 的另一侧 Scene/宿主不一致。以真机曾记录的原生 source=1 进行带动画 App Switcher 打开/返回，两 App Scene 与宿主返回后仍一致，三点视图为空，拖动控制器实例为零。**这不是逐帧视觉验证；用户对建立分屏及双击 Home 返回的闪动反馈仍待确认。** 临时观察器、Frida 服务和端口转发已关闭，恢复定时任务已解除，自动锁屏已恢复。
+
 稳定双 App 的 Scene 计算器和 Split View 宿主已能产生一致的上下矩形。原生选择第二个 App、全屏与分屏互转期间还存在单 item、peek 和其他切换器 modifier 路径。仅在完整双 App 布局返回上下矩形，不能保证这些过渡阶段的几何一致。
 
 动画修复需识别实际过渡对象，分别验证源矩形和目标矩形；不能把所有单 App、所有切换器缩略图或所有屏幕全局改成半屏。原生分隔控件的隐藏也必须与竖屏双 App 状态一致，并在退出后恢复。
