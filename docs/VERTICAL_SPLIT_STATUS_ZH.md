@@ -31,7 +31,13 @@
 
 所有新功能仍是实验功能；变更功能开关后需重启 SpringBoard。横屏回退原逻辑。尚需完成拖动 UI、过渡动画、键盘、旋转、锁屏、退出，以及更多 App 的生命周期验证。
 
-2026-10-23 继续测试时，设备实际是卸载后仅保留配置记录（`deinstall ok config-files`），已重新安装已校验的 vertical11 并启用测试。用户确认橙色自定义把手可见，但仍无法有效拖动；扩大纵向命中区也未解决。用户指出触控碰到下方 App 的三点按钮并弹出菜单。原生 `hitTestToTopAffordance:window:` 在其 `_SBTopAffordanceView` 已隐藏且禁止交互后仍会返回内部圆点视图，故不能仅靠 `UIView.hidden` 关闭原生命中。vertical12 完整隐藏功能据此实现；**尚待打包和真机验证**。此前横向位移和手势取消的记录不足以证明坐标变换错误，后续应继续区分原生抢占和自定义手势处理。
+2026-10-23 继续测试时，设备实际是卸载后仅保留配置记录（`deinstall ok config-files`），已重新安装已校验的 vertical11 并启用测试。用户确认橙色自定义把手可见，但仍无法有效拖动；扩大纵向命中区也未解决。用户指出触控碰到下方 App 的三点按钮并弹出菜单。原生 `hitTestToTopAffordance:window:` 在其 `_SBTopAffordanceView` 已隐藏且禁止交互后仍会返回内部圆点视图，故不能仅靠 `UIView.hidden` 关闭原生命中。
+
+vertical12 完整隐藏功能已通过 Actions `39948203528` 构建、Rootless 双架构检查并安装。全屏 Calculator 及 Calculator + Settings 上下分屏均读到 `_wantsTopAffordance = NO`、`topAffordanceView = nil`、原生命中查询返回 nil。两个分屏 Scene 仍为上方 375×332.5、下方 375×332.5，间隙 2 pt。横屏人工验证尚未完成。
+
+**隐藏三点按钮没有解决拖动问题**，用户仍反馈不跟随；原生分屏状态有窄/宽变化，自定义 pan 未收到该次事件。目前继续隔离 `SBFluidSwitcherGestureManager` 的原生尺寸手势接收路径；不得将隐藏成功或局部研究保护视为拖动修复成功。此前横向位移和手势取消的记录也不足以证明坐标变换错误。
+
+直接投递到自定义窗口上下文的 UIKit 自动拖动已完成开始、纵向移动和结束，比例由 0.5 改为约 0.40255；真实 Scene 更新为上方 267.5 pt、下方 397.5 pt、间隙 2 pt。此测试绕过真实触控路由，只证明自定义手势与原生尺寸事务链路可执行。读取到原生 `SBMainSwitcherWindow._usesWindowServerHitTesting = YES`，旧自定义窗口为 NO。vertical13 据此采用只覆盖 96×36 pt 把手的系统命中窗口，避免让全屏覆盖窗口拦截两个 App；启动前比对该私有 getter 的 `B16@0:8` 编码。**此窗口路由修正尚待构建安装和物理触控验证**。
 
 ## 构建与安装
 

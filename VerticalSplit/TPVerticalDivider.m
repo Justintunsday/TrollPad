@@ -18,6 +18,7 @@
 @property(nonatomic, weak) UIView *grabber;
 @end
 @implementation TPVerticalDividerWindow
+- (BOOL)_usesWindowServerHitTesting { return YES; }
 - (BOOL)pointInside:(CGPoint)point withEvent:(UIEvent *)event {
     if (self.hidden || !self.grabber || self.grabber.hidden) return NO;
     CGRect hitArea = [self.grabber convertRect:self.grabber.bounds toView:self];
@@ -55,7 +56,9 @@
 - (void)createWindowForScene:(UIWindowScene *)scene {
     self.window.hidden = YES;
     self.window = [[TPVerticalDividerWindow alloc] initWithWindowScene:scene];
-    self.window.frame = scene.coordinateSpace.bounds;
+    // A server-hit-tested window must only cover the actual control. A full
+    // screen window would prevent other processes from receiving their touches.
+    self.window.frame = CGRectMake(0, 0, 96, 36);
     self.window.backgroundColor = UIColor.clearColor;
     self.window.opaque = NO;
     self.window.windowLevel = UIWindowLevelStatusBar + 1;
@@ -89,7 +92,8 @@
 }
 
 - (void)positionGrabberAtY:(double)y {
-    self.grabber.center = CGPointMake(_viewport.size.width / 2, y - _viewport.origin.y);
+    self.window.frame = CGRectMake(_viewport.origin.x + (_viewport.size.width - 96) / 2, y - 18, 96, 36);
+    self.grabber.frame = self.window.bounds;
 }
 
 - (void)refresh {
@@ -110,7 +114,6 @@
     _viewport = viewport;
     _layout = layout;
     if (!self.window || self.window.windowScene != scene) [self createWindowForScene:scene];
-    self.window.frame = viewport;
     self.window.hidden = NO;
     if (!self.tracking) [self positionGrabberAtY:layout.dividerY];
     self.grabber.accessibilityValue = [NSString stringWithFormat:@"上方约 %.0f%%", 100 * layout.upper.height / (layout.upper.height + layout.lower.height)];

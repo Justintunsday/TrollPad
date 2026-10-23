@@ -348,6 +348,10 @@ void TPStartVerticalRuntime(void) {
     TPRuntimeInstalled = YES;
     TPStartPeekPreview();
     TPDividerEnabled = CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalDividerEnabled"), CFSTR("com.apple.springboard"), NULL);
-    if (TPDividerEnabled) TPStartVerticalDivider();
+    if (TPDividerEnabled && TPEncoding(UIWindow.class, sel_registerName("_usesWindowServerHitTesting"), "B16@0:8")) {
+        TPStartVerticalDivider();
+    } else if (TPDividerEnabled) {
+        NSLog(@"[TrollPadVertical] Divider disabled: window hit-test ABI mismatch");
+    }
     NSLog(@"[TrollPadVertical] Experimental vertical layout installed for 20B101");
 }
