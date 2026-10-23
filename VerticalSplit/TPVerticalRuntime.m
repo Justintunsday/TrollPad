@@ -22,6 +22,15 @@ static CGRect (*TPOriginalPeekFrame)(id, SEL, NSInteger, id, CGRect);
 static Ivar TPPeekConfigurationIvar, TPSpaceConfigurationIvar, TPPeekingLayoutIvar;
 static CGRect (*TPOriginalFullScreenPeekFrame)(id, SEL, NSInteger, id, CGRect);
 static Ivar TPTransitionPeekIvar;
+typedef struct { CGRect bounds, original, result; NSInteger role; BOOL overridden; CFAbsoluteTime time; } TPHostSample;
+static TPHostSample TPHostSamples[256];
+static NSUInteger TPHostSampleCount;
+static BOOL TPTraceHostFrames;
+
+static CGRect TPRecordHostFrame(CGRect bounds, CGRect original, CGRect result, NSInteger role, BOOL overridden) {
+    if (TPTraceHostFrames && TPHostSampleCount < 256) TPHostSamples[TPHostSampleCount++] = (TPHostSample){bounds, original, result, role, overridden, CFAbsoluteTimeGetCurrent()};
+    return result;
+}
 
 
 
@@ -114,9 +123,10 @@ static CGRect TPHostFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bo
     if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
     CGRect viewport = scene.coordinateSpace.bounds;
     if (!isfinite(bounds.size.width) || !isfinite(bounds.size.height) ||
-        fabs(bounds.size.width - viewport.size.width) > 0.5 || fabs(bounds.size.height - viewport.size.height) > 0.5) return original;
+        fabs(bounds.size.width - viewport.size.width) > 0.5 || fabs(bounds.size.height - viewport.size.height) > 0.5) return TPRecordHostFrame(bounds, original, original, role, NO);
     CGRect result;
-    return TPFrame(bounds, role, &result) ? result : original;
+    if (!TPFrame(bounds, role, &result)) return TPRecordHostFrame(bounds, original, original, role, NO);
+    return TPRecordHostFrame(bounds, original, result, role, YES);
 }
 
 static BOOL TPEncoding(Class cls, SEL selector, const char *expected) {
@@ -234,6 +244,20 @@ static void TPStartPeekPreview(void) {
 @end
 
 @implementation TPVerticalResearch
++ (void)setAnimationHostTracingEnabled:(BOOL)enabled {
+    if (![NSThread isMainThread]) return;
+    TPHostSampleCount = 0;
+    TPTraceHostFrames = enabled;
+}
++ (NSArray *)animationHostTrace {
+    if (![NSThread isMainThread]) return @[];
+    NSMutableArray *samples = [NSMutableArray array];
+    for (NSUInteger i = 0; i < TPHostSampleCount; i++) {
+        TPHostSample s = TPHostSamples[i];
+        [samples addObject:@{@"time": @(s.time), @"role": @(s.role), @"overridden": @(s.overridden), @"bounds": NSStringFromCGRect(s.bounds), @"original": NSStringFromCGRect(s.original), @"result": NSStringFromCGRect(s.result)}];
+    }
+    return samples;
+}
 + (double)dividerRatio { return TPDividerRatio; }
 + (BOOL)prepareDividerRatio:(double)ratio {
     if (!TPRuntimeInstalled || ![NSThread isMainThread] || !isfinite(ratio)) return NO;
