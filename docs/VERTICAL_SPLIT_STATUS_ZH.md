@@ -43,6 +43,8 @@ vertical13 已通过 Actions `39950164084`，完成 Rootless 双架构包检查�
 
 ## 构建与安装
 
+按用户建议，vertical14 改为复用 `SBFluidSwitcherGestureManager.sceneResizePanGestureRecognizer`，即安装在 `_UISystemGestureWindow/UISystemGestureView` 上的现有 `SBPanSystemGestureRecognizer`。中央 96×36 窗口只显示把手，关闭交互和系统命中，不再新建 UIPan。只在有效竖屏双 App 状态且触点位于把手内时接管该识别器的接收、开始和 fluid 回调；纵向位移用于预览，松手调用已有原生尺寸事务，避免同时开启原来的横向尺寸事务。其他识别器及其他布局保留原处理。四个目标方法已在本机读到完整 ABI，启动时检查类自有方法。Actions `39955146856` 构建与 Rootless 双架构检查已通过，真机已安装。两个前台 Scene 为 375×332.5，上下间隙 2 pt；实际把手窗口无交互、无自建识别器、系统命中关闭，两边三点视图仍为空。**真实手指尚待验证，不视为修复完成。**
+
 GitHub Actions 使用 macOS/Xcode、Theos、iOS16.5 SDK，先执行 C 测试，再构建 Rootless arm64/arm64e，保存 DEB、日志、工具链版本与 SHA256。PR 分支只跑 pull_request，main 保留 push 构建，避免重复任务。
 
 Rootless 安装脚本使用固定 `/var/jb`，不从 HOME 推导路径。资源链接使用 `ln -sfn`，避免升级时跟随已有目录软链接；修正后的 vertical4 已在手机上连续安装两次成功。原始系统资源不会被改写。
