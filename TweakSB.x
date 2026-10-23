@@ -5,6 +5,7 @@
 #import "UIKitPrivate.h"
 #import "VerticalSplit/TPVerticalDiagnostics.h"
 #import "VerticalSplit/TPVerticalRuntime.h"
+#import "VerticalSplit/TPNativeAffordance.h"
 
 #include <assert.h>
 #include <dlfcn.h>
@@ -432,5 +433,5 @@ BOOL MGGetBoolAnswer(NSString* property);
     }
 
     pref = [TPPrefsObserver new];
-    dispatch_async(dispatch_get_main_queue(), ^{ TPStartVerticalDiagnostics(); TPStartVerticalRuntime(); });
+    dispatch_async(dispatch_get_main_queue(), ^{ TPStartVerticalDiagnostics(); TPStartNativeAffordanceHiding(); TPStartVerticalRuntime(); });
 }

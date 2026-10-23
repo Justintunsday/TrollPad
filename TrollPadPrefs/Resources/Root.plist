@@ -66,6 +66,26 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
+			<string>App 多任务按钮</string>
+			<key>footerText</key>
+			<string>隐藏 App 顶部三点按钮并关闭其点击区域，适用于全屏、分屏及横竖屏。关闭此开关并重启桌面可恢复按钮。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.apple.springboard</string>
+			<key>key</key>
+			<string>TPHideNativeAffordanceEnabled</string>
+			<key>label</key>
+			<string>完全隐藏 App 三点按钮（需重启桌面）</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
 			<string>过渡布局研究</string>
 		</dict>
 		<dict>

@@ -25,10 +25,13 @@
 - `TPVerticalSplitEnabled`：默认关闭，SpringBoard 启动读取。仅允许 build 20B101，并完整比对关键方法类型编码。
 - `TPVerticalDividerEnabled`：默认关闭。vertical9 新增中央拖动把手，预览位置、松手提交；仅把手区域参与 UI hit test，不将窗口设为 key。只有主屏、竖屏、解锁、两个 App 前台且多任务界面关闭时显示。vertical9 曾收到完整开始、移动、结束手势；vertical10 修复逐事件取整丢失慢速位移，已构建安装，但用户仍报告不能跟随。后续读到旧键盘通知标志为真、当前 `UIKeyboardSceneDelegate.showingKeyboard` 为假，把手窗口因此隐藏；尺寸提交接口仍可成功调整到 60%。vertical11 改为查询当前键盘状态，检查两个 getter 的完整类型编码，不再缓存通知布尔值。**此修正及物理拖动仍待安装验证**；键盘弹出、收起及跨 App 的行为也尚未验证完整。
 - `TPVerticalPeekEnabled`：默认关闭的过渡预览研究。目标原生第二 App 选择状态已观察到 peekConfiguration 2、spaceConfiguration 4，以及旧的约 45 pt 左侧预览。新增 ABI/ivar 检查后的预览布局 Hook，**尚未完成真机动画验证**。
+- `TPHideNativeAffordanceEnabled`：默认关闭，独立于上下分屏开关。按用户要求在全屏、分屏和横竖屏完全隐藏 App 顶部三点按钮；阻止原生创建请求，隐藏已有视图并关闭其交互，同时让专用触控命中路径返回 nil。仅 build 20B101，三个目标 Hook 均检查完整类型编码和类自有方法。关闭开关并重启桌面可恢复。
 - `TPVerticalDiagnosticsEnabled`：默认关闭的只读元数据报告，可关闭再打开刷新，位置为 SpringBoard home 下 `Library/Logs/TrollPad/vertical-runtime.json`。
 - 原生尺寸事务使用已有活跃 Scene handle 构建实体，由 Apple 编译器生成 ARC Block；不使用手工 Frida Block。研究入口另由 `TPVerticalResizeResearchEnabled` 保护，拖动 UI 启用后可调用同一已验证后端。
 
 所有新功能仍是实验功能；变更功能开关后需重启 SpringBoard。横屏回退原逻辑。尚需完成拖动 UI、过渡动画、键盘、旋转、锁屏、退出，以及更多 App 的生命周期验证。
+
+2026-10-23 继续测试时，设备实际是卸载后仅保留配置记录（`deinstall ok config-files`），已重新安装已校验的 vertical11 并启用测试。用户确认橙色自定义把手可见，但仍无法有效拖动；扩大纵向命中区也未解决。用户指出触控碰到下方 App 的三点按钮并弹出菜单。原生 `hitTestToTopAffordance:window:` 在其 `_SBTopAffordanceView` 已隐藏且禁止交互后仍会返回内部圆点视图，故不能仅靠 `UIView.hidden` 关闭原生命中。vertical12 完整隐藏功能据此实现；**尚待打包和真机验证**。此前横向位移和手势取消的记录不足以证明坐标变换错误，后续应继续区分原生抢占和自定义手势处理。
 
 ## 构建与安装
 
