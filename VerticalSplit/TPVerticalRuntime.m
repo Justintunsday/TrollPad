@@ -86,9 +86,9 @@ static BOOL TPFrame(CGRect viewport, NSInteger role, CGRect *result) {
 
 static CGRect TPSceneFrame(id self, SEL cmd, NSInteger role, id layout, NSInteger orientation, id scene) {
     CGRect original = TPOriginalSceneFrame(self, cmd, role, layout, orientation, scene);
+    if (![NSThread isMainThread] || orientation != UIInterfaceOrientationPortrait) return original;
     NSInteger peekRole = TPPeekSceneRole(layout, role);
-    if (![NSThread isMainThread] || orientation != UIInterfaceOrientationPortrait ||
-        (!TPSplitPair(layout, role) && !peekRole)) return original;
+    if (!TPSplitPair(layout, role) && !peekRole) return original;
     if (![scene isKindOfClass:[UIWindowScene class]] || [(UIWindowScene *)scene screen] != UIScreen.mainScreen) return original;
     CGRect result;
     return TPFrame([(UIWindowScene *)scene coordinateSpace].bounds, peekRole ?: role, &result) ? result : original;
