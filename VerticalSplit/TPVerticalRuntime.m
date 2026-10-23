@@ -20,6 +20,8 @@ static NSInteger TPBuildingPeekRole;
 static id (*TPOriginalLayoutState)(id, SEL, id);
 static CGRect (*TPOriginalPeekFrame)(id, SEL, NSInteger, id, CGRect);
 static Ivar TPPeekConfigurationIvar, TPSpaceConfigurationIvar, TPPeekingLayoutIvar;
+static CGRect (*TPOriginalFullScreenPeekFrame)(id, SEL, NSInteger, id, CGRect);
+static Ivar TPTransitionPeekIvar;
 
 
 
@@ -63,13 +65,24 @@ static NSInteger TPVerticalRoleForPeek(NSInteger peek, NSInteger space) {
     return peek == 2 ? 1 : (peek == 3 ? 2 : 0);
 }
 
+static NSInteger TPPlaceholderRealRole(id layout) {
+    if (!TPSplitPair(layout, 1)) return 0;
+    for (NSInteger role = 1; role <= 2; role++) {
+        id item = ((id (*)(id, SEL, NSInteger))objc_msgSend)(layout, sel_registerName("itemForLayoutRole:"), role);
+        if ([TPObject(item, "bundleIdentifier") isEqual:@"com.apple.springboard.PeekPlacholderItem"]) return role == 1 ? 2 : 1;
+    }
+    return 0;
+}
+
 static NSInteger TPPeekSceneRole(id layout, NSInteger role) {
-    if (!TPPreviewEnabled || !TPSinglePrimary(layout, role)) return 0;
+    if (!TPPreviewEnabled) return 0;
+    NSInteger realRole = TPPlaceholderRealRole(layout);
+    if (!TPSinglePrimary(layout, role) && (!realRole || role != realRole)) return 0;
     if (TPBuildingPeekRole) return TPBuildingPeekRole;
     id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
     id state = TPObject(coordinator, "layoutState");
     // Values observed in the native portrait second-App picker on 20B101.
-    if (!state || ![TPObject(state, "appLayout") isEqual:layout]) return 0;
+    if (!state || (!realRole && ![TPObject(state, "appLayout") isEqual:layout])) return 0;
     return TPVerticalRoleForPeek(TPInteger(state, "peekConfiguration"), TPInteger(state, "spaceConfiguration"));
 }
 
@@ -141,6 +154,20 @@ static CGRect TPPeekFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bo
     return TPFrame(bounds, peekRole, &result) ? result : original;
 }
 
+static CGRect TPFullScreenPeekFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bounds) {
+    CGRect original = TPOriginalFullScreenPeekFrame(self, cmd, role, layout, bounds);
+    if (![NSThread isMainThread] || role != TPPlaceholderRealRole(layout) ||
+        !((BOOL (*)(id, SEL, id))objc_msgSend)(self, sel_registerName("_isPeekingAppLayout:"), layout)) return original;
+    NSInteger peekRole = TPVerticalRoleForPeek(TPIvarInteger(self, TPTransitionPeekIvar), 4);
+    UIWindowScene *scene = TPMainScene();
+    if (!peekRole || !scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    CGRect viewport = scene.coordinateSpace.bounds;
+    if (!isfinite(bounds.size.width) || !isfinite(bounds.size.height) ||
+        fabs(bounds.size.width - viewport.size.width) > 0.5 || fabs(bounds.size.height - viewport.size.height) > 0.5) return original;
+    CGRect result;
+    return TPFrame(bounds, peekRole, &result) ? result : original;
+}
+
 static BOOL TPOwnMethod(Class cls, SEL selector) {
     unsigned int count = 0;
     Method *methods = class_copyMethodList(cls, &count);
@@ -156,19 +183,26 @@ static void TPStartPeekPreview(void) {
     Class modifier = objc_getClass("SBPeekSplitViewRoutingSwitcherModifier");
     Class context = objc_getClass("SBWorkspaceApplicationSceneTransitionContext");
     Class state = objc_getClass("SBMainDisplayLayoutState");
+    Class transition = objc_getClass("SBFullScreenToPeekSwitcherModifier");
     SEL stateSelector = sel_registerName("_layoutStateForApplicationTransitionContext:");
     SEL frameSelector = sel_registerName("frameForLayoutRole:inAppLayout:withBounds:");
     TPPeekConfigurationIvar = class_getInstanceVariable(modifier, "_peekConfiguration");
     TPSpaceConfigurationIvar = class_getInstanceVariable(modifier, "_spaceConfiguration");
     TPPeekingLayoutIvar = class_getInstanceVariable(modifier, "_peekingAppLayout");
+    TPTransitionPeekIvar = class_getInstanceVariable(transition, "_peekConfiguration");
     if (!TPEncoding(manager, stateSelector, "@24@0:8@16") || !TPOwnMethod(manager, stateSelector) ||
         !TPEncoding(modifier, frameSelector, "{CGRect={CGPoint=dd}{CGSize=dd}}64@0:8q16@24{CGRect={CGPoint=dd}{CGSize=dd}}32") ||
         !TPOwnMethod(modifier, frameSelector) ||
+        !TPEncoding(transition, frameSelector, "{CGRect={CGPoint=dd}{CGSize=dd}}64@0:8q16@24{CGRect={CGPoint=dd}{CGSize=dd}}32") ||
+        !TPOwnMethod(transition, frameSelector) ||
+        !TPEncoding(transition, sel_registerName("_isPeekingAppLayout:"), "B24@0:8@16") ||
+        !TPEncoding(objc_getClass("SBDisplayItem"), sel_registerName("bundleIdentifier"), "@16@0:8") ||
         !TPEncoding(context, sel_registerName("requestedPeekConfiguration"), "q16@0:8") ||
         !TPEncoding(context, sel_registerName("requestedSpaceConfiguration"), "q16@0:8") ||
         !TPEncoding(state, sel_registerName("peekConfiguration"), "q16@0:8") ||
         !TPEncoding(state, sel_registerName("spaceConfiguration"), "q16@0:8") ||
-        !TPPeekConfigurationIvar || !TPSpaceConfigurationIvar || !TPPeekingLayoutIvar ||
+        !TPPeekConfigurationIvar || !TPSpaceConfigurationIvar || !TPPeekingLayoutIvar || !TPTransitionPeekIvar ||
+        strcmp(ivar_getTypeEncoding(TPTransitionPeekIvar), "q") != 0 ||
         strcmp(ivar_getTypeEncoding(TPPeekConfigurationIvar), "q") != 0 ||
         strcmp(ivar_getTypeEncoding(TPSpaceConfigurationIvar), "q") != 0 ||
         strcmp(ivar_getTypeEncoding(TPPeekingLayoutIvar), "@\"SBAppLayout\"") != 0) {
@@ -177,6 +211,7 @@ static void TPStartPeekPreview(void) {
     }
     MSHookMessageEx(manager, stateSelector, (IMP)TPLayoutState, (IMP *)&TPOriginalLayoutState);
     MSHookMessageEx(modifier, frameSelector, (IMP)TPPeekFrame, (IMP *)&TPOriginalPeekFrame);
+    MSHookMessageEx(transition, frameSelector, (IMP)TPFullScreenPeekFrame, (IMP *)&TPOriginalFullScreenPeekFrame);
     TPPreviewEnabled = YES;
 }
 
