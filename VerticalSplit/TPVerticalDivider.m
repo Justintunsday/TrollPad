@@ -219,8 +219,12 @@ static BOOL TPDividerOwnEncoding(Class cls, SEL selector, const char *types) {
 
 - (BOOL)canReceiveNativeTouch:(UITouch *)touch {
     if (self.busy || self.window.hidden || !touch || TPVerticalKeyboardVisible()) return NO;
-    CGPoint point = [touch locationInView:self.window];
-    return CGRectContainsPoint(self.window.bounds, point);
+    // System touches originate in _UIScreenBasedWindowScene, not SBWindowScene.
+    // On 20B101, asking UITouch to reproject into our window doubles the point
+    // before subtracting the window origin. Compare both in screen coordinates.
+    CGPoint point = [touch locationInView:nil];
+    CGRect screenGrip = [self.window convertRect:self.window.bounds toWindow:nil];
+    return isfinite(point.x) && isfinite(point.y) && CGRectContainsPoint(screenGrip, point);
 }
 
 - (void)adjustRatioBy:(double)delta {
