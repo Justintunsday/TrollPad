@@ -86,7 +86,9 @@ vertical20 在已核验 ABI 和 ivar 类型的事务入口归一化目标动作�
 
 实际观察到 `SBSplitDisplayItemSwitcherModifier` 的角色帧与子布局提升调用。目标原生非 Chamois 路径会先查询成对父布局的角色矩形，再交给 superclass 把单 App 放入该矩形；它与仅处理真实双项布局的 Split View 根宿主不同。新增修正位于这个具体类自有的角色帧方法，不改 `frameForIndex:` 或系统 Block。
 
-候选使用现有几何投影，保留原生父布局查询及子布局局部坐标转换。仅处理主显示序号 0、竖屏、两个真实 App 及原生匹配的子布局分支；普通单 App、占位项、其他显示序号和 Chamois 保留原处理。启动前核验 superclass、完整方法编码及 `_displayItem` ivar 类型；Dock 落位和图像比例修正保留。现有三组 C 回归通过，候选仍需 Rootless 编译和按“上滑呼出 Dock”进行真机验证。
+候选使用现有几何投影，保留原生父布局查询及子布局局部坐标转换。仅处理主显示序号 0、竖屏、两个真实 App 及原生匹配的子布局分支；普通单 App、占位项、其他显示序号和 Chamois 保留原处理。启动前核验 superclass、完整方法编码及 `_displayItem` ivar 类型；Dock 落位和图像比例修正保留。
+
+源码 `f1062505e9bf19ebfd55b8fb5536e0c99ae6d927` 的三组 C 回归及 Actions [40526926121](https://github.com/Justintunsday/TrollPad/actions/runs/40526926121) 已通过，Rootless 包的路径和 arm64/arm64e 检查通过，SHA256 为 `a08dca98cc35fe477e95ccc56db8c424a18787ab5148156f0b5f7d53e6d36302`。已在恢复保护下安装，六个入口的 ABI/实际注入及手机执行的 C 落点/比例检查通过。按“上滑呼出 Dock”的实际宿主帧和视觉结果仍待验证。
 
 ## 原生尺寸事务验证顺序（保留）
 
