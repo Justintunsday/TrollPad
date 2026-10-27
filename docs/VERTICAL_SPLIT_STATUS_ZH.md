@@ -10,6 +10,8 @@
 
 目标为 iPhone SE 2（iPhone12,8）、iOS 16.1.1（20B101）、Dopamine/ElleKit。已经用户授权通过 SSH 安装、恢复与测试。
 
+**2026-10-27 后续：vertical20** 已通过 Actions `40511283228`，完成 Rootless 包检查并在定时恢复保护下安装测试。用户确认 Dock 下方预览与最终落位一致，卡片不再拉长；**卡片仍有跳动，动画尚未修复完成**。后续只读采集正核对临时单应用快照与宿主的交接，未将未经证实的新 Hook 加入源码。分隔条与尺寸研究继续暂停。设备注入和开关会随受控测试及恢复变化，不把早先版本的启用状态视为当前状态。
+
 - 旧版 `SBMainDisplaySceneLayoutViewController` 在目标系统缺失。实际 Scene 几何入口是 `SBDisplayItemLayoutAttributesCalculator frameForLayoutRole:inAppLayout:containerOrientation:windowScene:`。
 - 显示宿主另经 `SBSwitcherModifier frameForLayoutRole:inAppLayout:withBounds:`。实际 Split View 接收者为 `SBSplitViewRootSwitcherModifier`，继承该方法；源码为目标子类先增加自有方法，避免修改整个基类。
 - 通过原生 Split View UIAction 建立 Calculator + Settings，实际两个 item、role 1/2、spaceConfiguration 4。不构造 scene ID，不手工改写持久化 AppLayout。
