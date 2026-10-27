@@ -18,6 +18,12 @@ int TPComputeAlignedVerticalLayout(TPRect viewport, double requestedDividerY,
                                    double gap, double minimumPaneHeight,
                                    int orientation, double step, TPVerticalLayout *output);
 
+// Project an already validated live-scene pane into the switcher's host bounds.
+// Host bounds may be scaled, translated or landscape-shaped during animation.
+// Keep live-scene alignment/minimum sizes in viewport; do not reapply them to
+// a thumbnail. Failure leaves output untouched.
+int TPProjectVerticalPane(TPRect viewport, TPRect bounds, TPRect pane, TPRect *output);
+
 // Historical iOS13/14 evidence only; these role IDs are NOT an iOS16 mapping.
 int TPLegacyRoleRequestMatches(double screenWidth, double requestedWidth,
                                int role, int orientation);

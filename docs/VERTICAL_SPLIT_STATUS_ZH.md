@@ -6,6 +6,8 @@
 
 **当前优先级（2026-10-23）：用户要求暂停可移动分隔条，先修复动画。设备当前为 vertical17；拖动和尺寸研究开关关闭，动画预览开关及三点按钮隐藏启用。** vertical14 真实拖动仍未通过；后续定位到系统触点跨窗口重投影异常，vertical15 源码修正但未安装。该分支工作已暂停，不应继续要求用户拖动测试。动画最新进展见 [ANIMATION_APPROACH_ZH.md](ANIMATION_APPROACH_ZH.md)。
 
+**2026-10-27 源码更新：vertical19** 将上下窗格连续投影到缩略和过渡宿主，修正旧全屏尺寸门限越界后回退左右布局的问题。新增 4,002 组动画容器回归检查，原有几何测试仍通过。该版本尚无新的真机安装与逐帧验证记录；设备状态以上述最后确认记录为准，不能视为当前在线读数。分隔条继续暂停。
+
 目标为 iPhone SE 2（iPhone12,8）、iOS 16.1.1（20B101）、Dopamine/ElleKit。已经用户授权通过 SSH 安装、恢复与测试。
 
 - 旧版 `SBMainDisplaySceneLayoutViewController` 在目标系统缺失。实际 Scene 几何入口是 `SBDisplayItemLayoutAttributesCalculator frameForLayoutRole:inAppLayout:containerOrientation:windowScene:`。

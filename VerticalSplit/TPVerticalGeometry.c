@@ -3,6 +3,29 @@
 
 static int positive(double x) { return isfinite(x) && x > 0; }
 
+static int valid_rect(TPRect r) {
+    return isfinite(r.x) && isfinite(r.y) && positive(r.width) && positive(r.height) &&
+           isfinite(r.x + r.width) && isfinite(r.y + r.height);
+}
+
+int TPProjectVerticalPane(TPRect viewport, TPRect bounds, TPRect pane, TPRect *out) {
+    if (!out || !valid_rect(viewport) || !valid_rect(bounds) || !valid_rect(pane) ||
+        pane.x != viewport.x || pane.width != viewport.width || pane.y < viewport.y ||
+        pane.y + pane.height > viewport.y + viewport.height) return 0;
+    double offset = pane.y - viewport.y;
+    // Preserve exact half-point scene/touch edges at full size. In thumbnails
+    // use continuous projection, including the gap; rounding each frame would
+    // introduce stepping and reapplying scene minimums would reject small cards.
+    int fullSize = bounds.width == viewport.width && bounds.height == viewport.height;
+    TPRect result = {bounds.x,
+                     bounds.y + (fullSize ? offset : offset / viewport.height * bounds.height),
+                     bounds.width,
+                     fullSize ? pane.height : pane.height / viewport.height * bounds.height};
+    if (!valid_rect(result)) return 0;
+    *out = result;
+    return 1;
+}
+
 int TPLegacyRoleRequestMatches(double width, double request, int role, int orientation) {
     if (!positive(width) || !isfinite(request) || request < 0 || orientation != 1)
         return 0;

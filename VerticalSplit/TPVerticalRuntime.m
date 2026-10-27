@@ -22,18 +22,19 @@ static CGRect (*TPOriginalPeekFrame)(id, SEL, NSInteger, id, CGRect);
 static Ivar TPPeekConfigurationIvar, TPSpaceConfigurationIvar, TPPeekingLayoutIvar;
 static CGRect (*TPOriginalFullScreenPeekFrame)(id, SEL, NSInteger, id, CGRect);
 static Ivar TPTransitionPeekIvar;
-typedef struct { CGRect bounds, original, result; NSInteger role; BOOL overridden; CFAbsoluteTime time; } TPHostSample;
+typedef struct { CGRect viewport, bounds, original, result; NSInteger role; BOOL overridden; const char *path; CFAbsoluteTime time; } TPHostSample;
 static TPHostSample TPHostSamples[256];
 static NSUInteger TPHostSampleCount;
+static NSUInteger TPHostSampleDropped;
 static BOOL TPTraceHostFrames;
 
-static CGRect TPRecordHostFrame(CGRect bounds, CGRect original, CGRect result, NSInteger role, BOOL overridden) {
-    if (TPTraceHostFrames && TPHostSampleCount < 256) TPHostSamples[TPHostSampleCount++] = (TPHostSample){bounds, original, result, role, overridden, CFAbsoluteTimeGetCurrent()};
+static CGRect TPRecordHostFrame(const char *path, CGRect viewport, CGRect bounds, CGRect original, CGRect result, NSInteger role, BOOL overridden) {
+    if (TPTraceHostFrames) {
+        if (TPHostSampleCount < 256) TPHostSamples[TPHostSampleCount++] = (TPHostSample){viewport, bounds, original, result, role, overridden, path, CFAbsoluteTimeGetCurrent()};
+        else TPHostSampleDropped++;
+    }
     return result;
 }
-
-
-
 static id TPObject(id object, const char *name) {
     SEL selector = sel_registerName(name);
     return [object respondsToSelector:selector] ? ((id (*)(id, SEL))objc_msgSend)(object, selector) : nil;
@@ -106,6 +107,18 @@ static BOOL TPFrame(CGRect viewport, NSInteger role, CGRect *result) {
     return YES;
 }
 
+static BOOL TPHostPaneFrame(CGRect viewport, CGRect bounds, NSInteger role, CGRect *result) {
+    CGRect pane;
+    if (!TPFrame(viewport, role, &pane)) return NO;
+    TPRect source = {viewport.origin.x, viewport.origin.y, viewport.size.width, viewport.size.height};
+    TPRect target = {bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height};
+    TPRect livePane = {pane.origin.x, pane.origin.y, pane.size.width, pane.size.height};
+    TPRect projected;
+    if (!TPProjectVerticalPane(source, target, livePane, &projected)) return NO;
+    *result = CGRectMake(projected.x, projected.y, projected.width, projected.height);
+    return YES;
+}
+
 static CGRect TPSceneFrame(id self, SEL cmd, NSInteger role, id layout, NSInteger orientation, id scene) {
     CGRect original = TPOriginalSceneFrame(self, cmd, role, layout, orientation, scene);
     if (![NSThread isMainThread] || orientation != UIInterfaceOrientationPortrait) return original;
@@ -122,11 +135,9 @@ static CGRect TPHostFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bo
     UIWindowScene *scene = TPMainScene();
     if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
     CGRect viewport = scene.coordinateSpace.bounds;
-    if (!isfinite(bounds.size.width) || !isfinite(bounds.size.height) ||
-        fabs(bounds.size.width - viewport.size.width) > 0.5 || fabs(bounds.size.height - viewport.size.height) > 0.5) return TPRecordHostFrame(bounds, original, original, role, NO);
     CGRect result;
-    if (!TPFrame(bounds, role, &result)) return TPRecordHostFrame(bounds, original, original, role, NO);
-    return TPRecordHostFrame(bounds, original, result, role, YES);
+    BOOL projected = TPHostPaneFrame(viewport, bounds, role, &result);
+    return TPRecordHostFrame("split", viewport, bounds, original, projected ? result : original, role, projected);
 }
 
 static BOOL TPEncoding(Class cls, SEL selector, const char *expected) {
@@ -158,10 +169,9 @@ static CGRect TPPeekFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bo
     UIWindowScene *scene = TPMainScene();
     if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
     CGRect viewport = scene.coordinateSpace.bounds;
-    if (!isfinite(bounds.size.width) || !isfinite(bounds.size.height) ||
-        fabs(bounds.size.width - viewport.size.width) > 0.5 || fabs(bounds.size.height - viewport.size.height) > 0.5) return original;
     CGRect result;
-    return TPFrame(bounds, peekRole, &result) ? result : original;
+    BOOL projected = TPHostPaneFrame(viewport, bounds, peekRole, &result);
+    return TPRecordHostFrame("peek", viewport, bounds, original, projected ? result : original, peekRole, projected);
 }
 
 static CGRect TPFullScreenPeekFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bounds) {
@@ -172,10 +182,9 @@ static CGRect TPFullScreenPeekFrame(id self, SEL cmd, NSInteger role, id layout,
     UIWindowScene *scene = TPMainScene();
     if (!peekRole || !scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
     CGRect viewport = scene.coordinateSpace.bounds;
-    if (!isfinite(bounds.size.width) || !isfinite(bounds.size.height) ||
-        fabs(bounds.size.width - viewport.size.width) > 0.5 || fabs(bounds.size.height - viewport.size.height) > 0.5) return original;
     CGRect result;
-    return TPFrame(bounds, peekRole, &result) ? result : original;
+    BOOL projected = TPHostPaneFrame(viewport, bounds, peekRole, &result);
+    return TPRecordHostFrame("fullscreen-to-peek", viewport, bounds, original, projected ? result : original, peekRole, projected);
 }
 
 static BOOL TPOwnMethod(Class cls, SEL selector) {
@@ -247,14 +256,19 @@ static void TPStartPeekPreview(void) {
 + (void)setAnimationHostTracingEnabled:(BOOL)enabled {
     if (![NSThread isMainThread]) return;
     TPHostSampleCount = 0;
+    TPHostSampleDropped = 0;
     TPTraceHostFrames = enabled;
+}
++ (NSDictionary *)animationHostTraceStatus {
+    if (![NSThread isMainThread]) return @{};
+    return @{@"enabled": @(TPTraceHostFrames), @"captured": @(TPHostSampleCount), @"dropped": @(TPHostSampleDropped)};
 }
 + (NSArray *)animationHostTrace {
     if (![NSThread isMainThread]) return @[];
     NSMutableArray *samples = [NSMutableArray array];
     for (NSUInteger i = 0; i < TPHostSampleCount; i++) {
         TPHostSample s = TPHostSamples[i];
-        [samples addObject:@{@"time": @(s.time), @"role": @(s.role), @"overridden": @(s.overridden), @"bounds": NSStringFromCGRect(s.bounds), @"original": NSStringFromCGRect(s.original), @"result": NSStringFromCGRect(s.result)}];
+        [samples addObject:@{@"time": @(s.time), @"path": @(s.path), @"role": @(s.role), @"overridden": @(s.overridden), @"viewport": NSStringFromCGRect(s.viewport), @"bounds": NSStringFromCGRect(s.bounds), @"original": NSStringFromCGRect(s.original), @"result": NSStringFromCGRect(s.result)}];
     }
     return samples;
 }
