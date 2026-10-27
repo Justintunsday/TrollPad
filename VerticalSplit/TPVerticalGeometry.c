@@ -8,6 +8,28 @@ static int valid_rect(TPRect r) {
            isfinite(r.x + r.width) && isfinite(r.y + r.height);
 }
 
+int TPVerticalRoleAtPoint(const TPVerticalLayout *layout, double x, double y) {
+    if (!layout || !isfinite(x) || !isfinite(y) ||
+        !valid_rect(layout->upper) || !valid_rect(layout->lower) ||
+        layout->upper.x != layout->lower.x || layout->upper.width != layout->lower.width ||
+        layout->lower.y < layout->upper.y + layout->upper.height) return 0;
+    TPRect panes[] = {layout->upper, layout->lower};
+    for (int i = 0; i < 2; i++) {
+        TPRect p = panes[i];
+        if (x >= p.x && x < p.x + p.width && y >= p.y && y < p.y + p.height) return i + 1;
+    }
+    return 0;
+}
+
+int TPVerticalSnapshotFrame(TPRect pane, TPRect nativeFrame, TPRect *out) {
+    if (!out || !valid_rect(pane) || !valid_rect(nativeFrame)) return 0;
+    TPRect result = {nativeFrame.x, nativeFrame.y, nativeFrame.width,
+                     nativeFrame.width * (pane.height / pane.width)};
+    if (!valid_rect(result)) return 0;
+    *out = result;
+    return 1;
+}
+
 int TPProjectVerticalPane(TPRect viewport, TPRect bounds, TPRect pane, TPRect *out) {
     if (!out || !valid_rect(viewport) || !valid_rect(bounds) || !valid_rect(pane) ||
         pane.x != viewport.x || pane.width != viewport.width || pane.y < viewport.y ||

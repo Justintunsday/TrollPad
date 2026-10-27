@@ -48,7 +48,19 @@ Actions [40498482224](https://github.com/Justintunsday/TrollPad/actions/runs/404
 
 设备始终锁屏，未尝试解锁，也未建立新的双 App 布局或执行 UI 转场。因此这里仅记录加载、ABI 与实际 ARM64 算法检查成功，**不记录真双 Scene、触控或动画视觉验收通过**。用户选择先做自动检查；视觉与生命周期项目仍待完成。已清理本次观察器、SSH 转发及恢复任务，保留新包，分隔条和尺寸研究继续关闭。未更改自动锁屏，未停止设备原已运行的 Frida 服务。
 
-## 原生尺寸事务验证顺序
+## 2026-10-27：录屏反馈与 vertical20 候选修正
+
+用户录屏确认 vertical19 仍有两项问题：卡片在过渡时变窄、拉长后跳回上下布局；Dock 拖入应用时预览落点与最终替换位置不一致。此后曾进入安全模式，暂时禁用两处 TrollPad 注入、关闭实验开关，用户重启并重新越狱后确认桌面正常。后续按用户“直接实机测试”的要求，在独立 root 定时恢复下做了两轮只读采集，完成后均关闭注入并清理观察器。
+
+目标 20B101 的实际 Dock 路径是 `SBDragAndDropWorkspaceTransaction` 生成拖放方案，经 `SBAppDragAndDropGestureSwitcherModifier` 接收事件；采集中的 `switcherDropRegionContext` 为空。不能只修改通用 drop-region context。实测手指位于下半屏时，原生动作仍随 x 位置变化。目标系统的角色映射另确认：动作 4/5 对应 primary/side；6/7 对应 floating，不能误把它们当作上下两侧。
+
+vertical20 在已核验 ABI 和 ivar 类型的事务入口归一化目标动作：仅限主屏竖屏、当前应用界面、初始布局包含两个真实 App，使用相同上下几何判定目标，生成 primary/side 原生方案。归一化发生在方案创建前，预览和最终提交共用方案；当 x 区域未变化、系统跳过重建时，仍检查 y 是否跨过分隔线。已有相同目标、相同 bounds 和相同原生方案对象可复用，避免每次移动重复构建。保留其他布局、屏幕和动作的原处理。
+
+快照有独立的 `_frameInLayoutSpaceForRole:inAppLayout:inOrientation:` 入口。候选修正使成对快照使用上下窗格；被系统拆成单 App 卡片的当前分屏应用保持窗格图像比例，保留原生卡片原点和宽度。普通单 App 及无关联快照保持原处理。没有全局修改 `frameForIndex:` 或动画时长。
+
+这些新增 Hook 由现有默认关闭的上下布局和预览开关共同保护，继续只允许 20B101、主线程与完整 ABI 校验。新增的落点与快照比例 C 检查通过，**此处仍为候选修正，不代表新包已编译、安装或通过视觉与最终 App 落位验收**。原有 host trace 增加 snapshot 路径；同一个采样开关另提供最多 128 条 `verticalDropTrace`，用于读回原生动作、目标动作和方案复用。
+
+## 原生尺寸事务验证顺序（保留）
 
 1. 在独立恢复机制下验证原生编译的事务，使用已有活跃 Scene handle，不构造 scene ID。
 2. 同时读回两个 Scene、显示宿主与 App 客户端窗口的新尺寸。

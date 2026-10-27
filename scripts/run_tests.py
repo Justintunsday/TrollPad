@@ -15,7 +15,7 @@ def main():
     args = parser.parse_args()
     compiler = args.cc or [shutil.which('clang') or shutil.which('cc') or 'clang']
     with tempfile.TemporaryDirectory(prefix='trollpad-tests-') as temp:
-        for name in ('test_vertical_geometry', 'test_vertical_host_projection'):
+        for name in ('test_vertical_geometry', 'test_vertical_host_projection', 'test_vertical_transition_geometry'):
             binary = Path(temp) / (name + ('.exe' if os.name == 'nt' else ''))
             command = compiler + ['-std=c11', '-Wall', '-Wextra', '-Werror',
                                  str(ROOT / 'VerticalSplit/TPVerticalGeometry.c'),

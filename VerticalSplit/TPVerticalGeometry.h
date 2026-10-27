@@ -24,6 +24,13 @@ int TPComputeAlignedVerticalLayout(TPRect viewport, double requestedDividerY,
 // a thumbnail. Failure leaves output untouched.
 int TPProjectVerticalPane(TPRect viewport, TPRect bounds, TPRect pane, TPRect *output);
 
+// Returns upper=1, lower=2, or 0 outside either pane (including the gap).
+int TPVerticalRoleAtPoint(const TPVerticalLayout *layout, double x, double y);
+
+// Fit a live pane's aspect ratio at the native snapshot width, retaining the
+// native origin. Failure leaves output untouched.
+int TPVerticalSnapshotFrame(TPRect pane, TPRect nativeFrame, TPRect *output);
+
 // Historical iOS13/14 evidence only; these role IDs are NOT an iOS16 mapping.
 int TPLegacyRoleRequestMatches(double screenWidth, double requestedWidth,
                                int role, int orientation);
