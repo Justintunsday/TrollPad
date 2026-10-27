@@ -70,6 +70,14 @@ vertical20 在已核验 ABI 和 ivar 类型的事务入口归一化目标动作�
 
 后续连续性采样记录了 14 次相关快照请求及 118 次模型/呈现层观察，未报采样错误。切换器打开时，两个快照的外层仍切换到原生 45×667、320×667 容器；图像目标帧虽已按窗格比例修正，返回应用时外层又变为 375×332.5。这进一步缩小了外层卡片交接的检查范围，但尚未确认产生该矩形的实际过渡对象，因此未新增全局卡片帧修正。自动打开/返回检查因设备锁屏而跳过；锁屏状态下不执行 UI 转场。
 
+## vertical21 候选：切换器默认宿主入口
+
+目标运行时的原生查询树还包含 `SBGridLayoutSwitcherModifier` 及具体的 `SBDefaultImplementationsSwitcherModifier`。后者自有的 `frameForLayoutRole:inAppLayout:withBounds:` 完整编码已核验，实际主屏查询对象的 `displayOrdinal` 为 0、`switcherInterfaceOrientation` 为 1；过渡中也观察到 `SBSplitDisplayItemSwitcherModifier` 的卡片帧、角色帧及子布局提升调用。此前只覆盖 Split View 根宿主，不能覆盖这条默认查询入口。
+
+候选修正复用既有的连续投影算法，在默认宿主入口处理两个真实 App 的角色 1/2。仅限精确的目标类、主显示序号 0、主 Scene 竖屏；普通单 App、占位选择器、浮动角色及其他显示序号保持原处理。安装前核验类自有方法及三个 getter/方法的完整 ABI，仍受默认关闭的布局和预览开关、20B101 限制。没有修改 `frameForIndex:`、动画曲线或原底包的 iPad 动画偏好。
+
+这是依据宿主缺口制作的候选修正，仍需构建、安装及用户视觉复测；不将外层帧关联直接记为跳动已经修复。Dock 的已验证目标归一化和 vertical20 的图像比例修正均保留。
+
 ## 原生尺寸事务验证顺序（保留）
 
 1. 在独立恢复机制下验证原生编译的事务，使用已有活跃 Scene handle，不构造 scene ID。

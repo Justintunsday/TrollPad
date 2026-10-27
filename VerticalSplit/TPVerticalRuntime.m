@@ -23,6 +23,7 @@ static Ivar TPPeekConfigurationIvar, TPSpaceConfigurationIvar, TPPeekingLayoutIv
 static CGRect (*TPOriginalFullScreenPeekFrame)(id, SEL, NSInteger, id, CGRect);
 static Ivar TPTransitionPeekIvar;
 static CGRect (*TPOriginalSnapshotFrame)(id, SEL, NSInteger, id, NSInteger);
+static CGRect (*TPOriginalDefaultHostFrame)(id, SEL, NSInteger, id, CGRect);
 static void (*TPOriginalDropUpdate)(id, SEL, id);
 static void (*TPOriginalDropPlan)(id, SEL);
 static Ivar TPDropActionIvar, TPDropInitialStateIvar, TPDropControllerIvar, TPDropProposedStateIvar;
@@ -152,6 +153,22 @@ static CGRect TPHostFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bo
     CGRect result;
     BOOL projected = TPHostPaneFrame(viewport, bounds, role, &result);
     return TPRecordHostFrame("split", viewport, bounds, original, projected ? result : original, role, projected);
+}
+
+static CGRect TPDefaultHostFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bounds) {
+    CGRect original = TPOriginalDefaultHostFrame(self, cmd, role, layout, bounds);
+    if (![NSThread isMainThread] || object_getClass(self) != objc_getClass("SBDefaultImplementationsSwitcherModifier") ||
+        !TPSplitPair(layout, role) || TPPlaceholderRealRole(layout)) return original;
+    // The grid and promoted-item query chains reach this concrete fallback
+    // without passing through SBSplitViewRootSwitcherModifier. Its native
+    // horizontal pane sizes must agree with the live vertical scene too.
+    if (TPInteger(self, "displayOrdinal") != 0 ||
+        TPInteger(self, "switcherInterfaceOrientation") != UIInterfaceOrientationPortrait) return original;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    CGRect viewport = scene.coordinateSpace.bounds, result;
+    BOOL projected = TPHostPaneFrame(viewport, bounds, role, &result);
+    return TPRecordHostFrame("switcher-default", viewport, bounds, original, projected ? result : original, role, projected);
 }
 
 static BOOL TPEncoding(Class cls, SEL selector, const char *expected) {
@@ -383,6 +400,14 @@ static BOOL TPIvarType(Ivar ivar, const char *types) {
 
 static void TPStartTransitionGeometry(void) {
     if (!TPPreviewEnabled) return;
+    Class defaults = objc_getClass("SBDefaultImplementationsSwitcherModifier");
+    SEL host = sel_registerName("frameForLayoutRole:inAppLayout:withBounds:");
+    if (TPEncoding(defaults, host, "{CGRect={CGPoint=dd}{CGSize=dd}}64@0:8q16@24{CGRect={CGPoint=dd}{CGSize=dd}}32") &&
+        TPOwnMethod(defaults, host) &&
+        TPEncoding(defaults, sel_registerName("displayOrdinal"), "q16@0:8") &&
+        TPEncoding(defaults, sel_registerName("switcherInterfaceOrientation"), "q16@0:8"))
+        MSHookMessageEx(defaults, host, (IMP)TPDefaultHostFrame, (IMP *)&TPOriginalDefaultHostFrame);
+    else NSLog(@"[TrollPadVertical] Switcher fallback geometry disabled: runtime ABI mismatch");
     Class snapshot = objc_getClass("SBAppSwitcherReusableSnapshotView");
     SEL frame = sel_registerName("_frameInLayoutSpaceForRole:inAppLayout:inOrientation:");
     if (TPEncoding(snapshot, frame, "{CGRect={CGPoint=dd}{CGSize=dd}}40@0:8q16@24q32") && TPOwnMethod(snapshot, frame))
