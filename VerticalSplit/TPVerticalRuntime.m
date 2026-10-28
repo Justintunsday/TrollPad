@@ -23,6 +23,9 @@ static Ivar TPPeekConfigurationIvar, TPSpaceConfigurationIvar, TPPeekingLayoutIv
 static CGRect (*TPOriginalFullScreenPeekFrame)(id, SEL, NSInteger, id, CGRect);
 static Ivar TPTransitionPeekIvar;
 static CGRect (*TPOriginalSnapshotFrame)(id, SEL, NSInteger, id, NSInteger);
+static CGRect (*TPOriginalPageFrame)(id, SEL, NSUInteger);
+static BOOL TPDockPageAnchorEnabled, TPDockPageAnchorInstalled;
+static BOOL TPActiveHandles(id *first, id *second);
 static void (*TPOriginalDropUpdate)(id, SEL, id);
 static void (*TPOriginalDropPlan)(id, SEL);
 static Ivar TPDropActionIvar, TPDropInitialStateIvar, TPDropControllerIvar, TPDropProposedStateIvar;
@@ -381,8 +384,41 @@ static BOOL TPIvarType(Ivar ivar, const char *types) {
     return ivar && ivar_getTypeEncoding(ivar) && strcmp(ivar_getTypeEncoding(ivar), types) == 0;
 }
 
+static CGRect TPPageFrame(id self, SEL cmd, NSUInteger index) {
+    CGRect original = TPOriginalPageFrame(self, cmd, index);
+    if ((!TPTraceHostFrames && !TPDockPageAnchorEnabled) || ![NSThread isMainThread] ||
+        object_getClass(self) != objc_getClass("SBiPadOSPlatformSwitcherModifier")) return original;
+    id pair = TPCurrentAppLayout();
+    if (!TPSplitPair(pair, 1) || TPPlaceholderRealRole(pair)) return original;
+    id layouts = TPObject(self, "appLayouts");
+    if (![layouts isKindOfClass:[NSArray class]] || index >= [layouts count] || ![layouts[index] isEqual:pair]) return original;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    CGRect viewport = scene.coordinateSpace.bounds;
+    id dock = TPObject(scene, "floatingDockController");
+    BOOL presented = [dock isKindOfClass:objc_getClass("SBFloatingDockController")] &&
+        ((BOOL (*)(id, SEL))objc_msgSend)(dock, sel_registerName("isFloatingDockPresented"));
+    TPRect anchored;
+    BOOL changed = TPDockPageAnchorEnabled && presented && TPActiveHandles(NULL, NULL) &&
+        TPAnchorVerticalDockPage((TPRect){viewport.origin.x, viewport.origin.y, viewport.size.width, viewport.size.height},
+                                (TPRect){original.origin.x, original.origin.y, original.size.width, original.size.height}, &anchored);
+    CGRect result = changed ? CGRectMake(anchored.x, anchored.y, anchored.width, anchored.height) : original;
+    return TPRecordHostFrame(presented ? "page-dock" : "page-native", viewport, viewport, original, result, (NSInteger)index, changed);
+}
+
 static void TPStartTransitionGeometry(void) {
     if (!TPPreviewEnabled) return;
+    Class root = objc_getClass("SBiPadOSPlatformSwitcherModifier");
+    SEL page = sel_registerName("frameForIndex:");
+    const char *pageTypes = "{CGRect={CGPoint=dd}{CGSize=dd}}24@0:8Q16";
+    if (TPEncoding(root, page, pageTypes) && TPEncoding(root, sel_registerName("appLayouts"), "@16@0:8") &&
+        TPEncoding(objc_getClass("SBWindowScene"), sel_registerName("floatingDockController"), "@16@0:8") &&
+        TPEncoding(objc_getClass("SBFloatingDockController"), sel_registerName("isFloatingDockPresented"), "B16@0:8") &&
+        !TPOwnMethod(root, page) && class_addMethod(root, page, method_getImplementation(class_getInstanceMethod(root, page)), pageTypes)) {
+        MSHookMessageEx(root, page, (IMP)TPPageFrame, (IMP *)&TPOriginalPageFrame);
+        TPDockPageAnchorInstalled = YES;
+        TPDockPageAnchorEnabled = CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalDockAnchorEnabled"), CFSTR("com.apple.springboard"), NULL);
+    } else NSLog(@"[TrollPadVertical] Dock page anchoring disabled: runtime ABI/ownership mismatch");
     Class snapshot = objc_getClass("SBAppSwitcherReusableSnapshotView");
     SEL frame = sel_registerName("_frameInLayoutSpaceForRole:inAppLayout:inOrientation:");
     if (TPEncoding(snapshot, frame, "{CGRect={CGPoint=dd}{CGSize=dd}}40@0:8q16@24q32") && TPOwnMethod(snapshot, frame))
@@ -422,12 +458,19 @@ static void TPStartTransitionGeometry(void) {
 @end
 
 @interface TPVerticalResearch : NSObject
++ (BOOL)enableDockPageAnchoring:(BOOL)enabled;
 + (double)dividerRatio;
 + (BOOL)prepareDividerRatio:(double)ratio;
 + (BOOL)requestRatio:(double)ratio primaryHandle:(id)primary secondaryHandle:(id)secondary;
 @end
 
 @implementation TPVerticalResearch
++ (BOOL)enableDockPageAnchoring:(BOOL)enabled {
+    if (![NSThread isMainThread] || !TPRuntimeInstalled || !TPDockPageAnchorInstalled) return NO;
+    CFPreferencesAppSynchronize(CFSTR("com.apple.springboard"));
+    TPDockPageAnchorEnabled = enabled && CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalDockAnchorEnabled"), CFSTR("com.apple.springboard"), NULL);
+    return TPDockPageAnchorEnabled;
+}
 + (void)setAnimationHostTracingEnabled:(BOOL)enabled {
     if (![NSThread isMainThread]) return;
     TPHostSampleCount = 0;
