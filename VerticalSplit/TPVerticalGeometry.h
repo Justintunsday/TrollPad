@@ -31,6 +31,11 @@ int TPVerticalRoleAtPoint(const TPVerticalLayout *layout, double x, double y);
 // native origin. Failure leaves output untouched.
 int TPVerticalSnapshotFrame(TPRect pane, TPRect nativeFrame, TPRect *output);
 
+// Opt-in Dock-page candidate: anchor only an unscaled portrait page displaced
+// one page to the leading side. Caller must verify active pair + visible Dock.
+// Refuse partial movement, other pages, vertical movement and scaled cards.
+int TPAnchorVerticalDockPage(TPRect viewport, TPRect nativeFrame, TPRect *output);
+
 // Historical iOS13/14 evidence only; these role IDs are NOT an iOS16 mapping.
 int TPLegacyRoleRequestMatches(double screenWidth, double requestedWidth,
                                int role, int orientation);

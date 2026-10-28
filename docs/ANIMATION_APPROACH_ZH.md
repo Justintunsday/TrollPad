@@ -116,6 +116,14 @@ vertical24 源码 `526d0806dc4b94d89c81efee0465b9f2e0f11e8d` 已通过 Actions [
 
 vertical25 只增加一个具体控制器入口的原生帧记录：`SBFluidSwitcherViewController.scaledFrameForLayoutRole:inAppLayout:`。目标设备已核验它是类自有的 SpringBoard 实现，完整 ABI 为 `{CGRect={CGPoint=dd}{CGSize=dd}}32@0:8q16@24`，原生代码将布局索引交给缩放角色帧查询。包装函数始终返回原始结果，仅在既有只读采样开启、精确接收类、主屏竖屏双 App 时记录 `scaled-main`；未修改分页帧、动画或缓存。安装仍受默认关闭的布局/预览开关及 20B101 限制。后续需核对该入口是否参与已抓到的错误偏移及 Dock 状态，才能选择修正范围。
 
+vertical25 源码 `5c36b024e9a888a7c57ea6ea0d59c71ba554a455` 已通过 Actions [40696599718](https://github.com/Justintunsday/TrollPad/actions/runs/40696599718)、Rootless 双架构包检查并受控安装。六处 ABI/实际 Hook 检查及落点/比例回归通过。用户一次复现取得 213 条记录，没有丢弃或采集错误，但没有命中新增最终帧入口；因此 vertical26 移除这个未参与的诊断 Hook。
+
+## vertical26：默认关闭的 Dock 当前页锚定候选
+
+已核验主场景 `SBWindowScene.floatingDockController` 的 @16 返回类型，以及实际 `SBFloatingDockController.isFloatingDockPresented` 的 B16 返回类型。候选仅在默认关闭的 `TPVerticalDockAnchorEnabled` 打开时处理：精确的主平台根修改器、主屏竖屏、当前真实双 App 布局对应的分页索引、解锁、两 App 均前台、主切换器未显示且 Dock 已显示。只纠正与全屏尺寸/y完全相同、向左越出一页但不足两页的帧，保留部分横向移动、缩略卡片、其他页面与其他布局。
+
+该入口的 `{CGRect={CGPoint=dd}{CGSize=dd}}24@0:8Q16` ABI 已在目标设备核验。安装时先给目标子类增加自有方法，避免替换整个继承基类；不再主动查询内部子路由。诊断可记录 `page-dock`/`page-native` 的原始帧与输出帧，记录中的 role 字段代表分页索引。候选开关初始关闭，允许在既有受控研究接口中根据显式偏好启用，无需再次重启桌面。新增 C 回归覆盖实机 -399 pt 偏移、两窗格投影、非零原点，以及部分移动、其他页、缩放、纵向移动、横屏和非法数据的排除。编译、真实命中和视觉效果仍需分别验证；不能把候选实现视为修复成功。
+
 ## 原生尺寸事务验证顺序（保留）
 
 1. 在独立恢复机制下验证原生编译的事务，使用已有活跃 Scene handle，不构造 scene ID。

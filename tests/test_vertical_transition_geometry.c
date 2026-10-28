@@ -38,6 +38,25 @@ int main(void) {
     assert(TPVerticalRoleAtPoint(&layout,100,60)==1);
     assert(TPVerticalRoleAtPoint(&layout,100,500)==2);
     assert(TPVerticalRoleAtPoint(&layout,100,393)==0);
-    puts("PASS: vertical drop targets and snapshot aspect; device-point regressions, gap, translations, invalid input");
+    // Physical Dock regression: both live panes moved left by one 399pt page
+    // while the current pair remained index 0. Preserve its size and y.
+    TPRect anchored, nativePage={-399,0,375,667};
+    assert(TPAnchorVerticalDockPage(viewport,nativePage,&anchored));
+    assert(anchored.x==0 && anchored.y==0 && anchored.width==375 && anchored.height==667);
+    assert(TPComputeAlignedVerticalLayout(viewport,333.5,2,151,1,0.5,&layout));
+    assert(TPProjectVerticalPane(viewport,anchored,layout.lower,&snapshot));
+    assert(snapshot.x==0 && snapshot.y==334.5 && snapshot.height==332.5);
+    assert(TPAnchorVerticalDockPage((TPRect){12.5,59.5,375,667},(TPRect){-386.5,59.5,375,667},&anchored));
+    assert(anchored.x==12.5 && anchored.y==59.5);
+    anchored=(TPRect){123,456,7,8};
+    TPRect refused[]={viewport,{-20,0,375,667},{399,0,375,667},{-798,0,375,667},
+                      {-399,10,375,667},{-399,0,300,533.6},{NAN,0,375,667},{-399,0,375,INFINITY}};
+    for(unsigned i=0;i<sizeof(refused)/sizeof(refused[0]);i++){
+        assert(!TPAnchorVerticalDockPage(viewport,refused[i],&anchored));
+        assert(anchored.x==123 && anchored.y==456);
+    }
+    assert(!TPAnchorVerticalDockPage((TPRect){0,0,667,375},(TPRect){-700,0,667,375},&anchored));
+    assert(!TPAnchorVerticalDockPage(viewport,nativePage,NULL));
+    puts("PASS: vertical drop targets, snapshot aspect and Dock page anchoring; device regressions, movement exclusions, invalid input");
     return 0;
 }
