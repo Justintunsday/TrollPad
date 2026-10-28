@@ -23,6 +23,7 @@ static Ivar TPPeekConfigurationIvar, TPSpaceConfigurationIvar, TPPeekingLayoutIv
 static CGRect (*TPOriginalFullScreenPeekFrame)(id, SEL, NSInteger, id, CGRect);
 static Ivar TPTransitionPeekIvar;
 static CGRect (*TPOriginalSnapshotFrame)(id, SEL, NSInteger, id, NSInteger);
+static CGRect (*TPOriginalScaledItemFrame)(id, SEL, NSInteger, id);
 static void (*TPOriginalDropUpdate)(id, SEL, id);
 static void (*TPOriginalDropPlan)(id, SEL);
 static Ivar TPDropActionIvar, TPDropInitialStateIvar, TPDropControllerIvar, TPDropProposedStateIvar;
@@ -381,8 +382,25 @@ static BOOL TPIvarType(Ivar ivar, const char *types) {
     return ivar && ivar_getTypeEncoding(ivar) && strcmp(ivar_getTypeEncoding(ivar), types) == 0;
 }
 
+static CGRect TPScaledItemFrame(id self, SEL cmd, NSInteger role, id layout) {
+    CGRect original = TPOriginalScaledItemFrame(self, cmd, role, layout);
+    // Observe the concrete controller's final item frame, including page offset.
+    // Keep this diagnostic separate from the modifier query-dispatch machinery.
+    if (!TPTraceHostFrames || ![NSThread isMainThread] ||
+        object_getClass(self) != objc_getClass("SBFluidSwitcherViewController") || !TPSplitPair(layout, role)) return original;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    CGRect viewport = scene.coordinateSpace.bounds;
+    return TPRecordHostFrame("scaled-main", viewport, viewport, original, original, role, NO);
+}
+
 static void TPStartTransitionGeometry(void) {
     if (!TPPreviewEnabled) return;
+    Class controller = objc_getClass("SBFluidSwitcherViewController");
+    SEL scaled = sel_registerName("scaledFrameForLayoutRole:inAppLayout:");
+    if (TPEncoding(controller, scaled, "{CGRect={CGPoint=dd}{CGSize=dd}}32@0:8q16@24") && TPOwnMethod(controller, scaled))
+        MSHookMessageEx(controller, scaled, (IMP)TPScaledItemFrame, (IMP *)&TPOriginalScaledItemFrame);
+    else NSLog(@"[TrollPadVertical] Final item-frame diagnostics disabled: runtime ABI mismatch");
     Class snapshot = objc_getClass("SBAppSwitcherReusableSnapshotView");
     SEL frame = sel_registerName("_frameInLayoutSpaceForRole:inAppLayout:inOrientation:");
     if (TPEncoding(snapshot, frame, "{CGRect={CGPoint=dd}{CGSize=dd}}40@0:8q16@24q32") && TPOwnMethod(snapshot, frame))
