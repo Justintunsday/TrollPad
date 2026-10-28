@@ -98,6 +98,10 @@ vertical20 在已核验 ABI 和 ivar 类型的事务入口归一化目标动作�
 
 vertical22 补充测试中，SpringBoard 在恢复定时器到期前更换进程，未发现对应崩溃报告，原因尚未确认。因此本版本把过渡运行时代码恢复到用户已确认不再拉长且 Dock 落位一致的 vertical20 基线，移除 vertical21/22 新增宿主 Hook。分隔条和尺寸研究继续关闭。本次只验证底部上滑呼出 Dock 的剩余跳动是否与强制后台样式有关；编译及设备结果另行记录。
 
+vertical23 源码 `971abefa66979ce5494294789301913e7166b652` 已通过 Actions [40685798354](https://github.com/Justintunsday/TrollPad/actions/runs/40685798354)，Rootless 双架构包检查通过并已受控安装。设备读回样式与动画开关均为 false，`effectiveSwitcherStyle` 为 1，已有五处 Hook 和 C 落点/比例检查通过；vertical21/22 的两处宿主方法已恢复系统实现。该轮仍锁屏、无 Dock 手势记录。
+
+进一步核对发现系统配置的 `switcherStyle` 为自动值 0；原生有效样式查询会读取 `UIDevice.userInterfaceIdiom`。底包在创建分屏控制器时临时模拟 iPad，因此仅在锁屏状态读到样式 1，不能证明初始化也选了手机样式。vertical24 在关闭强制样式时，用线程局部、可重入且保证退出恢复的作用域，让该查询读取真实设备类型。查询以外的 Medusa 设备类型模拟保留，避免关闭分屏所需的其他初始化。后台实际布局仍需读回与视觉验证。
+
 ## 原生尺寸事务验证顺序（保留）
 
 1. 在独立恢复机制下验证原生编译的事务，使用已有活跃 Scene handle，不构造 scene ID。
