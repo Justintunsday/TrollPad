@@ -30,18 +30,6 @@ int TPVerticalSnapshotFrame(TPRect pane, TPRect nativeFrame, TPRect *out) {
     return 1;
 }
 
-int TPAnchorVerticalDockPage(TPRect viewport, TPRect nativeFrame, TPRect *out) {
-    if (!out || !valid_rect(viewport) || !valid_rect(nativeFrame) ||
-        viewport.height <= viewport.width || nativeFrame.y != viewport.y ||
-        nativeFrame.width != viewport.width || nativeFrame.height != viewport.height) return 0;
-    double displacement = viewport.x - nativeFrame.x;
-    if (!isfinite(displacement) || displacement < viewport.width ||
-        displacement >= viewport.width * 2) return 0;
-    *out = nativeFrame;
-    out->x = viewport.x;
-    return 1;
-}
-
 int TPProjectVerticalPane(TPRect viewport, TPRect bounds, TPRect pane, TPRect *out) {
     if (!out || !valid_rect(viewport) || !valid_rect(bounds) || !valid_rect(pane) ||
         pane.x != viewport.x || pane.width != viewport.width || pane.y < viewport.y ||

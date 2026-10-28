@@ -26,8 +26,6 @@ static TPPrefsObserver* pref;
 // so I just hook them, set iPad idiom when necessary and set back to iPhone after calling original
 
 static uint16_t forcePadIdiom = 0;
-// A native switcher-style query must see the real device, even during Medusa setup.
-static __thread uint16_t nativeSwitcherStyleDepth = 0;
 
 %hook UIDevice
 - (UIUserInterfaceIdiom)userInterfaceIdiom {
@@ -41,7 +39,7 @@ static __thread uint16_t nativeSwitcherStyleDepth = 0;
         if (!fileHandle) {
             fileHandle = [NSFileHandle fileHandleForWritingAtPath:tmpOut];
             if (!fileHandle) {
-                if (forcePadIdiom > 0 && nativeSwitcherStyleDepth == 0) {
+                if (forcePadIdiom > 0) {
                     return UIUserInterfaceIdiomPad;
                 } else {
                     return %orig;
@@ -65,7 +63,7 @@ static __thread uint16_t nativeSwitcherStyleDepth = 0;
     }
 #endif
 
-    if (forcePadIdiom > 0 && nativeSwitcherStyleDepth == 0) {
+    if (forcePadIdiom > 0) {
         return UIUserInterfaceIdiomPad;
     } else {
         return %orig;
@@ -348,16 +346,10 @@ static __thread uint16_t nativeSwitcherStyleDepth = 0;
 }
 %end
 
-// Allow testing the native phone switcher independently of its animation style.
+// Force iPad app switcher, otherwise it will be broken
 %hook SBAppSwitcherSettings
 - (NSInteger)effectiveSwitcherStyle {
-    if (!pref || pref.forceiPadSwitcherStyle) return 2;
-    nativeSwitcherStyleDepth++;
-    @try {
-        return %orig;
-    } @finally {
-        nativeSwitcherStyleDepth--;
-    }
+    return 2;
 }
 
 // Scales the grid switcher

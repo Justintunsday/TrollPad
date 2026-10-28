@@ -206,18 +206,6 @@
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
-			<true/>
-			<key>defaults</key>
-			<string>com.apple.springboard</string>
-			<key>key</key>
-			<string>TPForceiPadSwitcherStyle</string>
-			<key>label</key>
-			<string>iPad-style App Switcher (reload required)</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
 			<false/>
 			<key>defaults</key>
 			<string>com.apple.springboard</string>
