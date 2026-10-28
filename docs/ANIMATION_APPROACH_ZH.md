@@ -102,6 +102,8 @@ vertical23 源码 `971abefa66979ce5494294789301913e7166b652` 已通过 Actions [
 
 进一步核对发现系统配置的 `switcherStyle` 为自动值 0；原生有效样式查询会读取 `UIDevice.userInterfaceIdiom`。底包在创建分屏控制器时临时模拟 iPad，因此仅在锁屏状态读到样式 1，不能证明初始化也选了手机样式。vertical24 在关闭强制样式时，用线程局部、可重入且保证退出恢复的作用域，让该查询读取真实设备类型。查询以外的 Medusa 设备类型模拟保留，避免关闭分屏所需的其他初始化。后台实际布局仍需读回与视觉验证。
 
+vertical24 源码 `526d0806dc4b94d89c81efee0465b9f2e0f11e8d` 已通过 Actions [40686966785](https://github.com/Justintunsday/TrollPad/actions/runs/40686966785)，Rootless 路径和 arm64/arm64e 包检查通过，SHA256 为 `47a1e6a1094a1ae78525c647c162fcf63f2b899f9e2928d944e86de249f39b0f`。已在独立 root 定时恢复保护下安装。设备确认强制 iPad 样式和动画均关闭、上下分屏/预览与浮动 Dock 均开启，五处20基线 Hook/ABI 和 C 落点/比例检查通过。实际主后台链路从 vertical23 的 `SBGridSwitcherModifier` 变为 `SBDeckSwitcherModifier`，因此已取得手机卡片布局初始化证据；Medusa 所需的外层平台控制器保留。能否建立真实上下分屏及底部呼出 Dock 是否仍跳动，仍待本版用户复测，不能把后台类型变化等同于动画修复。
+
 ## 原生尺寸事务验证顺序（保留）
 
 1. 在独立恢复机制下验证原生编译的事务，使用已有活跃 Scene handle，不构造 scene ID。
