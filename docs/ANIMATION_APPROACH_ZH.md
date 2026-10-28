@@ -158,6 +158,8 @@ vertical27 提交 `b943c0f0f9b07a336a887f24cfa2dc875041d0df` 已通过 Actions [
 
 原版后台布局、偏好观察器与设置页保持 vertical20 的源码；Dock 锚定保持 vertical27。纯 C 几何回归已通过。新构建、实际命中、后台功能及视觉回归尚待分别验证。
 
+源码 `df07cbfebfdce00161370f4dc77579a84e93c224` 已通过 Actions [40779636481](https://github.com/Justintunsday/TrollPad/actions/runs/40779636481)。Rootless 路径和 arm64/arm64e 包检查通过，SHA256 为 `98546d845c102fda27434fb630c08d2dfe6344b8fa8ef4f497526d623e42b1b3`。已在独立 root 恢复保护下安装。原有五处入口、Dock 根入口、新增具体回退入口均读回预期 ABI 和实际注入；五个过渡 getter、两个研究 setter 的完整 ABI，以及设备 C 卡片投影检查通过。后台样式仍为 2；分屏、预览、Dock、锚定开启，分隔条和尺寸研究关闭。两个新候选先保持关闭，待解锁并建立双 App 后分别启用、采集。以上仅证明构建和加载，不代表跳动已修复。
+
 ## 原生尺寸事务验证顺序（保留）
 
 1. 在独立恢复机制下验证原生编译的事务，使用已有活跃 Scene handle，不构造 scene ID。
