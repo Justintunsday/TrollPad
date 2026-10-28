@@ -138,6 +138,8 @@ vertical26 源码 `3d9330e5aba31ae4353332cd38a6855c71b7a198` 已通过 Actions [
 
 用户明确要求回退到仍有 Dock 跳动的旧版本。已安装此前实机验证的原始 vertical20 包（SHA256 `de77742bc76027dcb409a658ca055becc57f331f5d7606941294a1191767ffbb`），恢复原有 iPad 后台，并关闭后续候选。源码的全部非文档文件恢复为 `213b6f4ad5af4151ef5ed9af2ec489c6053dba37` 的相同基线，历史研究通过 Git 和本记录保留。设备实际版本为 `1.3.1~vertical20`，用户确认**后台及返回分屏均正常**。分屏/预览、隐藏三点与浮动 Dock 保留开启，分隔条和尺寸研究关闭；采集服务及恢复定时器已清理。旧的呼出 Dock 跳动仍存在，后续实验未获本次回归验收。
 
+源码回退提交 `8107c78fc6f16d3d70cd6ed2dc2acad2ed83b8fe` 已通过 Actions [40703257241](https://github.com/Justintunsday/TrollPad/actions/runs/40703257241)。重建包通过 Rootless 路径和 arm64/arm64e 检查，SHA256 为 `c6134348e4bb265b47a7dbb7f9493ad710512e11565a9f60a486a1b47569fd04`。重建包仅用于验证回退源码，未再次安装；设备保持上段的原始已验证 vertical20 包。当前源码相对 `213b6f4` 仅两份历史文档有差异。
+
 ## 原生尺寸事务验证顺序（保留）
 
 1. 在独立恢复机制下验证原生编译的事务，使用已有活跃 Scene handle，不构造 scene ID。
