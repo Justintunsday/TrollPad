@@ -25,6 +25,9 @@ static Ivar TPTransitionPeekIvar;
 static CGRect (*TPOriginalSnapshotFrame)(id, SEL, NSInteger, id, NSInteger);
 static CGRect (*TPOriginalPageFrame)(id, SEL, NSUInteger);
 static BOOL TPDockPageAnchorEnabled, TPDockPageAnchorInstalled;
+static BOOL TPExitSnapshotEnabled, TPExitSnapshotCompatible;
+static CGRect (*TPOriginalSwitcherFallbackFrame)(id, SEL, NSInteger, id, CGRect);
+static BOOL TPSwitcherGeometryEnabled, TPSwitcherGeometryInstalled;
 static BOOL TPActiveHandles(id *first, id *second);
 static void (*TPOriginalDropUpdate)(id, SEL, id);
 static void (*TPOriginalDropPlan)(id, SEL);
@@ -162,6 +165,23 @@ static BOOL TPEncoding(Class cls, SEL selector, const char *expected) {
     return method && method_getTypeEncoding(method) && strcmp(method_getTypeEncoding(method), expected) == 0;
 }
 
+static CGRect TPSwitcherFallbackFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bounds) {
+    CGRect original = TPOriginalSwitcherFallbackFrame(self, cmd, role, layout, bounds);
+    if (![NSThread isMainThread] || object_getClass(self) != objc_getClass("SBDefaultImplementationsSwitcherModifier") ||
+        !TPSplitPair(layout, role) || TPPlaceholderRealRole(layout)) return original;
+    // Match the main coordinator's pair rather than issuing cached modifier
+    // queries for display or orientation from an unrelated query context.
+    id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
+    if (![layout isEqual:TPObject(TPObject(coordinator, "layoutState"), "appLayout")]) return original;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    // Grid layout and page-view layout can query this concrete fallback
+    // directly, without passing through SBSplitViewRootSwitcherModifier.
+    CGRect viewport = scene.coordinateSpace.bounds, result;
+    BOOL changed = TPSwitcherGeometryEnabled && TPHostPaneFrame(viewport, bounds, role, &result);
+    return TPRecordHostFrame("switcher-fallback", viewport, bounds, original, changed ? result : original, role, changed);
+}
+
 static id TPLayoutState(id self, SEL cmd, id context) {
     if (![NSThread isMainThread]) return TPOriginalLayoutState(self, cmd, context);
     NSInteger previous = TPBuildingPeekRole;
@@ -256,9 +276,8 @@ static id TPCurrentAppLayout(void) {
     return TPObject(TPObject(coordinator, "layoutState"), "appLayout");
 }
 
-static NSInteger TPCurrentPaneForLeaf(id leaf) {
+static NSInteger TPPaneForLeafInPair(id leaf, id pair) {
     if (!TPSinglePrimary(leaf, 1)) return 0;
-    id pair = TPCurrentAppLayout();
     if (!TPSplitPair(pair, 1) || TPPlaceholderRealRole(pair)) return 0;
     SEL item = sel_registerName("itemForLayoutRole:");
     id displayItem = ((id (*)(id, SEL, NSInteger))objc_msgSend)(leaf, item, 1);
@@ -267,6 +286,21 @@ static NSInteger TPCurrentPaneForLeaf(id leaf) {
         if ([candidate isEqual:displayItem]) return role;
     }
     return 0;
+}
+
+static NSInteger TPCurrentPaneForLeaf(id leaf, BOOL *fromTransition) {
+    NSInteger role = TPPaneForLeafInPair(leaf, TPCurrentAppLayout());
+    if (role || !TPExitSnapshotEnabled) return role;
+    // During a split-to-Home transition the current layout is already empty,
+    // while the outgoing leaf snapshots still belong to the transition's pair.
+    // Read only that live context; do not retain a previous foreground layout.
+    id coordinator = TPObject(TPMainScene(), "layoutStateTransitionCoordinator");
+    if (!((BOOL (*)(id, SEL))objc_msgSend)(coordinator, sel_registerName("isTransitioning"))) return 0;
+    id context = TPObject(coordinator, "transitionContext");
+    id pair = TPObject(TPObject(context, "fromLayoutState"), "appLayout");
+    role = TPPaneForLeafInPair(leaf, pair);
+    if (role && fromTransition) *fromTransition = YES;
+    return role;
 }
 
 static CGRect TPSnapshotFrame(id self, SEL cmd, NSInteger role, id layout, NSInteger orientation) {
@@ -287,7 +321,8 @@ static CGRect TPSnapshotFrame(id self, SEL cmd, NSInteger role, id layout, NSInt
     // The switcher can promote each item of a pair into a single-App card.
     // Its live scene still has pane dimensions: retain the card's native
     // origin/width, but never stretch that image to a full-height scene.
-    NSInteger paneRole = role == 1 ? TPCurrentPaneForLeaf(layout) : 0;
+    BOOL fromTransition = NO;
+    NSInteger paneRole = role == 1 ? TPCurrentPaneForLeaf(layout, &fromTransition) : 0;
     CGRect pane;
     if (!paneRole || !TPFrame(viewport, paneRole, &pane)) return original;
     TPRect live = {pane.origin.x, pane.origin.y, pane.size.width, pane.size.height};
@@ -295,7 +330,7 @@ static CGRect TPSnapshotFrame(id self, SEL cmd, NSInteger role, id layout, NSInt
     TPRect fitted;
     if (!TPVerticalSnapshotFrame(live, native, &fitted)) return original;
     result = CGRectMake(fitted.x, fitted.y, fitted.width, fitted.height);
-    return TPRecordHostFrame("snapshot-leaf", viewport, view.bounds, original, result, paneRole, YES);
+    return TPRecordHostFrame(fromTransition ? "snapshot-leaf-exit" : "snapshot-leaf", viewport, view.bounds, original, result, paneRole, YES);
 }
 
 static BOOL TPDropTargetAction(id transaction, id session, NSInteger *action, CGRect *bounds, CGPoint *locationOut) {
@@ -408,6 +443,22 @@ static CGRect TPPageFrame(id self, SEL cmd, NSUInteger index) {
 
 static void TPStartTransitionGeometry(void) {
     if (!TPPreviewEnabled) return;
+    TPExitSnapshotCompatible =
+        TPEncoding(objc_getClass("SBWindowScene"), sel_registerName("layoutStateTransitionCoordinator"), "@16@0:8") &&
+        TPEncoding(objc_getClass("SBLayoutStateTransitionCoordinator"), sel_registerName("isTransitioning"), "B16@0:8") &&
+        TPEncoding(objc_getClass("SBLayoutStateTransitionCoordinator"), sel_registerName("transitionContext"), "@16@0:8") &&
+        TPEncoding(objc_getClass("SBLayoutStateTransitionContext"), sel_registerName("fromLayoutState"), "@16@0:8") &&
+        TPEncoding(objc_getClass("SBMainDisplayLayoutState"), sel_registerName("appLayout"), "@16@0:8");
+    TPExitSnapshotEnabled = TPExitSnapshotCompatible &&
+        CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalExitSnapshotEnabled"), CFSTR("com.apple.springboard"), NULL);
+    Class fallback = objc_getClass("SBDefaultImplementationsSwitcherModifier");
+    SEL fallbackFrame = sel_registerName("frameForLayoutRole:inAppLayout:withBounds:");
+    if (TPEncoding(fallback, fallbackFrame, "{CGRect={CGPoint=dd}{CGSize=dd}}64@0:8q16@24{CGRect={CGPoint=dd}{CGSize=dd}}32") &&
+        TPOwnMethod(fallback, fallbackFrame)) {
+        MSHookMessageEx(fallback, fallbackFrame, (IMP)TPSwitcherFallbackFrame, (IMP *)&TPOriginalSwitcherFallbackFrame);
+        TPSwitcherGeometryInstalled = YES;
+        TPSwitcherGeometryEnabled = CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalSwitcherGeometryEnabled"), CFSTR("com.apple.springboard"), NULL);
+    } else NSLog(@"[TrollPadVertical] Switcher fallback geometry disabled: runtime ABI/ownership mismatch");
     Class root = objc_getClass("SBiPadOSPlatformSwitcherModifier");
     SEL page = sel_registerName("frameForIndex:");
     const char *pageTypes = "{CGRect={CGPoint=dd}{CGSize=dd}}24@0:8Q16";
@@ -459,12 +510,26 @@ static void TPStartTransitionGeometry(void) {
 
 @interface TPVerticalResearch : NSObject
 + (BOOL)enableDockPageAnchoring:(BOOL)enabled;
++ (BOOL)enableExitSnapshotContinuity:(BOOL)enabled;
++ (BOOL)enableSwitcherGeometry:(BOOL)enabled;
 + (double)dividerRatio;
 + (BOOL)prepareDividerRatio:(double)ratio;
 + (BOOL)requestRatio:(double)ratio primaryHandle:(id)primary secondaryHandle:(id)secondary;
 @end
 
 @implementation TPVerticalResearch
++ (BOOL)enableSwitcherGeometry:(BOOL)enabled {
+    if (![NSThread isMainThread] || !TPRuntimeInstalled || !TPSwitcherGeometryInstalled) return NO;
+    CFPreferencesAppSynchronize(CFSTR("com.apple.springboard"));
+    TPSwitcherGeometryEnabled = enabled && CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalSwitcherGeometryEnabled"), CFSTR("com.apple.springboard"), NULL);
+    return TPSwitcherGeometryEnabled;
+}
++ (BOOL)enableExitSnapshotContinuity:(BOOL)enabled {
+    if (![NSThread isMainThread] || !TPRuntimeInstalled || !TPExitSnapshotCompatible) return NO;
+    CFPreferencesAppSynchronize(CFSTR("com.apple.springboard"));
+    TPExitSnapshotEnabled = enabled && CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalExitSnapshotEnabled"), CFSTR("com.apple.springboard"), NULL);
+    return TPExitSnapshotEnabled;
+}
 + (BOOL)enableDockPageAnchoring:(BOOL)enabled {
     if (![NSThread isMainThread] || !TPRuntimeInstalled || !TPDockPageAnchorInstalled) return NO;
     CFPreferencesAppSynchronize(CFSTR("com.apple.springboard"));
