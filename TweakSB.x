@@ -346,10 +346,11 @@ static uint16_t forcePadIdiom = 0;
 }
 %end
 
-// Force iPad app switcher, otherwise it will be broken
+// Allow testing the native phone switcher independently of its animation style.
 %hook SBAppSwitcherSettings
 - (NSInteger)effectiveSwitcherStyle {
-    return 2;
+    if (!pref || pref.forceiPadSwitcherStyle) return 2;
+    return %orig;
 }
 
 // Scales the grid switcher

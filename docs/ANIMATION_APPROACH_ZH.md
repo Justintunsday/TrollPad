@@ -92,6 +92,12 @@ vertical20 在已核验 ABI 和 ivar 类型的事务入口归一化目标动作�
 
 本轮观察期间设备保持锁屏，未取得 Dock 手势帧记录，不能确认跳动已修复。观察结束已核对两处测试注入禁用、五个实验开关关闭、临时服务及恢复任务清理；新安装包保留，后续需在设备解锁并保持亮屏时复测。
 
+## vertical23：关闭强制 iPad 后台布局的对照测试
+
+用户要求关闭 iPad 样式后台。原有 `TPUseiPadAppSwitchingAnimation` 已关闭，但 `SBAppSwitcherSettings.effectiveSwitcherStyle` 仍无条件返回 iPad 样式。新增独立的 `TPForceiPadSwitcherStyle` 设置：未设置时保留原底包行为，显式关闭后调用系统原实现；需要重新加载桌面。不能预先假定系统原实现的数值或最终界面类型，需读回设备确认。
+
+vertical22 补充测试中，SpringBoard 在恢复定时器到期前更换进程，未发现对应崩溃报告，原因尚未确认。因此本版本把过渡运行时代码恢复到用户已确认不再拉长且 Dock 落位一致的 vertical20 基线，移除 vertical21/22 新增宿主 Hook。分隔条和尺寸研究继续关闭。本次只验证底部上滑呼出 Dock 的剩余跳动是否与强制后台样式有关；编译及设备结果另行记录。
+
 ## 原生尺寸事务验证顺序（保留）
 
 1. 在独立恢复机制下验证原生编译的事务，使用已有活跃 Scene handle，不构造 scene ID。

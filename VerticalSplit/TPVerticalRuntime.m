@@ -23,8 +23,6 @@ static Ivar TPPeekConfigurationIvar, TPSpaceConfigurationIvar, TPPeekingLayoutIv
 static CGRect (*TPOriginalFullScreenPeekFrame)(id, SEL, NSInteger, id, CGRect);
 static Ivar TPTransitionPeekIvar;
 static CGRect (*TPOriginalSnapshotFrame)(id, SEL, NSInteger, id, NSInteger);
-static CGRect (*TPOriginalItemHostFrame)(id, SEL, NSInteger, id, CGRect);
-static Ivar TPItemDisplayIvar;
 static void (*TPOriginalDropUpdate)(id, SEL, id);
 static void (*TPOriginalDropPlan)(id, SEL);
 static Ivar TPDropActionIvar, TPDropInitialStateIvar, TPDropControllerIvar, TPDropProposedStateIvar;
@@ -255,8 +253,9 @@ static id TPCurrentAppLayout(void) {
     return TPObject(TPObject(coordinator, "layoutState"), "appLayout");
 }
 
-static NSInteger TPPaneForLeafInPair(id leaf, id pair) {
+static NSInteger TPCurrentPaneForLeaf(id leaf) {
     if (!TPSinglePrimary(leaf, 1)) return 0;
+    id pair = TPCurrentAppLayout();
     if (!TPSplitPair(pair, 1) || TPPlaceholderRealRole(pair)) return 0;
     SEL item = sel_registerName("itemForLayoutRole:");
     id displayItem = ((id (*)(id, SEL, NSInteger))objc_msgSend)(leaf, item, 1);
@@ -265,43 +264,6 @@ static NSInteger TPPaneForLeafInPair(id leaf, id pair) {
         if ([candidate isEqual:displayItem]) return role;
     }
     return 0;
-}
-
-static NSInteger TPCurrentPaneForLeaf(id leaf) {
-    return TPPaneForLeafInPair(leaf, TPCurrentAppLayout());
-}
-
-static CGRect TPItemHostFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bounds) {
-    CGRect original = TPOriginalItemHostFrame(self, cmd, role, layout, bounds);
-    Class cls = objc_getClass("SBSplitDisplayItemSwitcherModifier");
-    if (![NSThread isMainThread] || object_getClass(self) != cls ||
-        TPInteger(self, "displayOrdinal") != 0 ||
-        TPInteger(self, "switcherInterfaceOrientation") != UIInterfaceOrientationPortrait ||
-        ((BOOL (*)(id, SEL))objc_msgSend)(self, sel_registerName("isChamoisWindowingUIEnabled"))) return original;
-    UIWindowScene *scene = TPMainScene();
-    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
-    CGRect viewport = scene.coordinateSpace.bounds, pane;
-    if (TPSplitPair(layout, role) && !TPPlaceholderRealRole(layout)) {
-        BOOL projected = TPHostPaneFrame(viewport, bounds, role, &pane);
-        return TPRecordHostFrame("split-item-pair", viewport, bounds, original, projected ? pane : original, role, projected);
-    }
-    if (!TPSinglePrimary(layout, role)) return original;
-    // Match the native non-Chamois child-to-parent branch. Use the parent
-    // query from the superclass, then let that same superclass express the
-    // single-App result in its own local coordinates. Do not split it twice.
-    struct objc_super query = {self, class_getSuperclass(cls)};
-    id parent = ((id (*)(struct objc_super *, SEL, id))objc_msgSendSuper)(
-        &query, sel_registerName("appLayoutContainingAppLayout:"), layout);
-    NSInteger paneRole = TPPaneForLeafInPair(layout, parent);
-    id owner = object_getIvar(self, TPItemDisplayIvar);
-    SEL contains = sel_registerName("containsItem:");
-    if (!paneRole || !owner || ((BOOL (*)(id, SEL, id))objc_msgSend)(layout, contains, owner) ||
-        !((BOOL (*)(id, SEL, id))objc_msgSend)(parent, contains, owner))
-        return TPRecordHostFrame("split-item-native", viewport, bounds, original, original, paneRole, NO);
-    if (!TPHostPaneFrame(viewport, bounds, paneRole, &pane)) return original;
-    CGRect result = ((CGRect (*)(struct objc_super *, SEL, NSInteger, id, CGRect))objc_msgSendSuper)(
-        &query, cmd, role, layout, pane);
-    return TPRecordHostFrame("split-item-leaf", viewport, bounds, original, result, paneRole, YES);
 }
 
 static CGRect TPSnapshotFrame(id self, SEL cmd, NSInteger role, id layout, NSInteger orientation) {
@@ -421,21 +383,6 @@ static BOOL TPIvarType(Ivar ivar, const char *types) {
 
 static void TPStartTransitionGeometry(void) {
     if (!TPPreviewEnabled) return;
-    Class item = objc_getClass("SBSplitDisplayItemSwitcherModifier");
-    Class base = objc_getClass("SBSwitcherModifier");
-    SEL host = sel_registerName("frameForLayoutRole:inAppLayout:withBounds:");
-    const char *hostTypes = "{CGRect={CGPoint=dd}{CGSize=dd}}64@0:8q16@24{CGRect={CGPoint=dd}{CGSize=dd}}32";
-    TPItemDisplayIvar = class_getInstanceVariable(item, "_displayItem");
-    if (class_getSuperclass(item) == base && TPEncoding(item, host, hostTypes) && TPOwnMethod(item, host) &&
-        TPEncoding(base, host, hostTypes) &&
-        TPEncoding(base, sel_registerName("appLayoutContainingAppLayout:"), "@24@0:8@16") &&
-        TPEncoding(item, sel_registerName("displayOrdinal"), "q16@0:8") &&
-        TPEncoding(item, sel_registerName("switcherInterfaceOrientation"), "q16@0:8") &&
-        TPEncoding(item, sel_registerName("isChamoisWindowingUIEnabled"), "B16@0:8") &&
-        TPEncoding(objc_getClass("SBAppLayout"), sel_registerName("containsItem:"), "B24@0:8@16") &&
-        TPIvarType(TPItemDisplayIvar, "@\"SBDisplayItem\""))
-        MSHookMessageEx(item, host, (IMP)TPItemHostFrame, (IMP *)&TPOriginalItemHostFrame);
-    else NSLog(@"[TrollPadVertical] Split-item geometry disabled: runtime ABI mismatch");
     Class snapshot = objc_getClass("SBAppSwitcherReusableSnapshotView");
     SEL frame = sel_registerName("_frameInLayoutSpaceForRole:inAppLayout:inOrientation:");
     if (TPEncoding(snapshot, frame, "{CGRect={CGPoint=dd}{CGSize=dd}}40@0:8q16@24q32") && TPOwnMethod(snapshot, frame))
