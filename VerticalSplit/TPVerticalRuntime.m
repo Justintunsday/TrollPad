@@ -387,11 +387,14 @@ static CGRect TPScaledItemFrame(id self, SEL cmd, NSInteger role, id layout) {
     // Observe the concrete controller's final item frame, including page offset.
     // Keep this diagnostic separate from the modifier query-dispatch machinery.
     if (!TPTraceHostFrames || ![NSThread isMainThread] ||
-        object_getClass(self) != objc_getClass("SBFluidSwitcherViewController") || !TPSplitPair(layout, role)) return original;
+        object_getClass(self) != objc_getClass("SBFluidSwitcherViewController")) return original;
+    BOOL paired = TPSplitPair(layout, role);
+    NSInteger paneRole = paired ? role : (role == 1 ? TPCurrentPaneForLeaf(layout) : 0);
+    if (!paneRole) return original;
     UIWindowScene *scene = TPMainScene();
     if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
     CGRect viewport = scene.coordinateSpace.bounds;
-    return TPRecordHostFrame("scaled-main", viewport, viewport, original, original, role, NO);
+    return TPRecordHostFrame(paired ? "scaled-main" : "scaled-leaf", viewport, viewport, original, original, paneRole, NO);
 }
 
 static void TPStartTransitionGeometry(void) {
