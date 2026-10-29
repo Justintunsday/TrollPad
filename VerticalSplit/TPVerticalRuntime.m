@@ -28,6 +28,8 @@ static BOOL TPDockPageAnchorEnabled, TPDockPageAnchorInstalled;
 static BOOL TPExitSnapshotEnabled, TPExitSnapshotCompatible;
 static CGRect (*TPOriginalSwitcherFallbackFrame)(id, SEL, NSInteger, id, CGRect);
 static BOOL TPSwitcherGeometryEnabled, TPSwitcherGeometryInstalled;
+static void (*TPOriginalGestureBegan)(id, SEL, id);
+static BOOL TPGestureStartAnchorEnabled, TPGestureStartAnchorInstalled, TPPreparingGestureStart;
 static BOOL TPActiveHandles(id *first, id *second);
 static void (*TPOriginalDropUpdate)(id, SEL, id);
 static void (*TPOriginalDropPlan)(id, SEL);
@@ -434,11 +436,31 @@ static CGRect TPPageFrame(id self, SEL cmd, NSUInteger index) {
     BOOL presented = [dock isKindOfClass:objc_getClass("SBFloatingDockController")] &&
         ((BOOL (*)(id, SEL))objc_msgSend)(dock, sel_registerName("isFloatingDockPresented"));
     TPRect anchored;
-    BOOL changed = TPDockPageAnchorEnabled && presented && TPActiveHandles(NULL, NULL) &&
+    BOOL changed = TPDockPageAnchorEnabled && (presented || TPPreparingGestureStart) && TPActiveHandles(NULL, NULL) &&
         TPAnchorVerticalDockPage((TPRect){viewport.origin.x, viewport.origin.y, viewport.size.width, viewport.size.height},
                                 (TPRect){original.origin.x, original.origin.y, original.size.width, original.size.height}, &anchored);
     CGRect result = changed ? CGRectMake(anchored.x, anchored.y, anchored.width, anchored.height) : original;
-    return TPRecordHostFrame(presented ? "page-dock" : "page-native", viewport, viewport, original, result, (NSInteger)index, changed);
+    return TPRecordHostFrame(TPPreparingGestureStart ? "page-gesture-start" : (presented ? "page-dock" : "page-native"), viewport, viewport, original, result, (NSInteger)index, changed);
+}
+
+static void TPGestureBegan(id self, SEL cmd, id gesture) {
+    // The interactive transition reads its source page before the Dock is
+    // presented. Keep that synchronous source read consistent with the live
+    // split, rather than changing an animation after its source was captured.
+    if (!TPGestureStartAnchorEnabled || !TPDockPageAnchorEnabled || ![NSThread isMainThread] ||
+        object_getClass(self) != objc_getClass("SBFluidSwitcherGestureManager") ||
+        ![gesture isKindOfClass:objc_getClass("SBFluidSwitcherScreenEdgePanGestureRecognizer")] ||
+        [(UIGestureRecognizer *)gesture state] != UIGestureRecognizerStateBegan ||
+        !TPActiveHandles(NULL, NULL)) {
+        TPOriginalGestureBegan(self, cmd, gesture);
+        return;
+    }
+    BOOL previous = TPPreparingGestureStart;
+    TPPreparingGestureStart = YES;
+    CGRect viewport = TPMainScene().coordinateSpace.bounds;
+    TPRecordHostFrame("gesture-start", viewport, viewport, viewport, viewport, 0, NO);
+    @try { TPOriginalGestureBegan(self, cmd, gesture); }
+    @finally { TPPreparingGestureStart = previous; }
 }
 
 static void TPStartTransitionGeometry(void) {
@@ -470,6 +492,16 @@ static void TPStartTransitionGeometry(void) {
         TPDockPageAnchorInstalled = YES;
         TPDockPageAnchorEnabled = CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalDockAnchorEnabled"), CFSTR("com.apple.springboard"), NULL);
     } else NSLog(@"[TrollPadVertical] Dock page anchoring disabled: runtime ABI/ownership mismatch");
+    Class gestureManager = objc_getClass("SBFluidSwitcherGestureManager");
+    Class edgeGesture = objc_getClass("SBFluidSwitcherScreenEdgePanGestureRecognizer");
+    SEL began = sel_registerName("_handleSwitcherPanGestureBegan:");
+    if (TPDockPageAnchorInstalled && edgeGesture &&
+        TPEncoding(edgeGesture, @selector(state), "q16@0:8") &&
+        TPEncoding(gestureManager, began, "v24@0:8@16") && TPOwnMethod(gestureManager, began)) {
+        MSHookMessageEx(gestureManager, began, (IMP)TPGestureBegan, (IMP *)&TPOriginalGestureBegan);
+        TPGestureStartAnchorInstalled = YES;
+        TPGestureStartAnchorEnabled = CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalGestureStartAnchorEnabled"), CFSTR("com.apple.springboard"), NULL);
+    } else NSLog(@"[TrollPadVertical] Gesture source anchoring disabled: runtime ABI/ownership mismatch");
     Class snapshot = objc_getClass("SBAppSwitcherReusableSnapshotView");
     SEL frame = sel_registerName("_frameInLayoutSpaceForRole:inAppLayout:inOrientation:");
     if (TPEncoding(snapshot, frame, "{CGRect={CGPoint=dd}{CGSize=dd}}40@0:8q16@24q32") && TPOwnMethod(snapshot, frame))
@@ -512,12 +544,19 @@ static void TPStartTransitionGeometry(void) {
 + (BOOL)enableDockPageAnchoring:(BOOL)enabled;
 + (BOOL)enableExitSnapshotContinuity:(BOOL)enabled;
 + (BOOL)enableSwitcherGeometry:(BOOL)enabled;
++ (BOOL)enableGestureStartAnchoring:(BOOL)enabled;
 + (double)dividerRatio;
 + (BOOL)prepareDividerRatio:(double)ratio;
 + (BOOL)requestRatio:(double)ratio primaryHandle:(id)primary secondaryHandle:(id)secondary;
 @end
 
 @implementation TPVerticalResearch
++ (BOOL)enableGestureStartAnchoring:(BOOL)enabled {
+    if (![NSThread isMainThread] || !TPRuntimeInstalled || !TPGestureStartAnchorInstalled) return NO;
+    CFPreferencesAppSynchronize(CFSTR("com.apple.springboard"));
+    TPGestureStartAnchorEnabled = enabled && CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalGestureStartAnchorEnabled"), CFSTR("com.apple.springboard"), NULL);
+    return TPGestureStartAnchorEnabled;
+}
 + (BOOL)enableSwitcherGeometry:(BOOL)enabled {
     if (![NSThread isMainThread] || !TPRuntimeInstalled || !TPSwitcherGeometryInstalled) return NO;
     CFPreferencesAppSynchronize(CFSTR("com.apple.springboard"));

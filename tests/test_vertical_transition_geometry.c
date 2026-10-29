@@ -43,6 +43,9 @@ int main(void) {
     TPRect anchored, nativePage={-399,0,375,667};
     assert(TPAnchorVerticalDockPage(viewport,nativePage,&anchored));
     assert(anchored.x==0 && anchored.y==0 && anchored.width==375 && anchored.height==667);
+    // Fullscreen gesture source read observed before Dock presentation.
+    assert(TPAnchorVerticalDockPage(viewport,(TPRect){-423,0,375,667},&anchored));
+    assert(anchored.x==0 && anchored.y==0 && anchored.width==375 && anchored.height==667);
     assert(TPComputeAlignedVerticalLayout(viewport,333.5,2,151,1,0.5,&layout));
     assert(TPProjectVerticalPane(viewport,anchored,layout.lower,&snapshot));
     assert(snapshot.x==0 && snapshot.y==334.5 && snapshot.height==332.5);
@@ -50,7 +53,8 @@ int main(void) {
     assert(anchored.x==12.5 && anchored.y==59.5);
     anchored=(TPRect){123,456,7,8};
     TPRect refused[]={viewport,{-20,0,375,667},{399,0,375,667},{-798,0,375,667},
-                      {-399,10,375,667},{-399,0,300,533.6},{NAN,0,375,667},{-399,0,375,INFINITY}};
+                      {-399,10,375,667},{-422.999989,-0.000005,375,667},
+                      {-399,0,300,533.6},{NAN,0,375,667},{-399,0,375,INFINITY}};
     for(unsigned i=0;i<sizeof(refused)/sizeof(refused[0]);i++){
         assert(!TPAnchorVerticalDockPage(viewport,refused[i],&anchored));
         assert(anchored.x==123 && anchored.y==456);
