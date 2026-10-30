@@ -1,0 +1,770 @@
+#import "TPVerticalRuntime.h"
+#import "TPVerticalGeometry.h"
+#import <UIKit/UIKit.h>
+#import <CoreFoundation/CoreFoundation.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
+#import <substrate.h>
+#include <sys/sysctl.h>
+#include <string.h>
+#include <math.h>
+#include <stdlib.h>
+
+static CGRect (*TPOriginalSceneFrame)(id, SEL, NSInteger, id, NSInteger, id);
+static CGRect (*TPOriginalHostFrame)(id, SEL, NSInteger, id, CGRect);
+static BOOL TPRuntimeInstalled;
+static BOOL TPDividerEnabled;
+static double TPDividerRatio = 0.5;
+static BOOL TPPreviewEnabled;
+static NSInteger TPBuildingPeekRole;
+static id (*TPOriginalLayoutState)(id, SEL, id);
+static CGRect (*TPOriginalPeekFrame)(id, SEL, NSInteger, id, CGRect);
+static Ivar TPPeekConfigurationIvar, TPSpaceConfigurationIvar, TPPeekingLayoutIvar;
+static CGRect (*TPOriginalFullScreenPeekFrame)(id, SEL, NSInteger, id, CGRect);
+static Ivar TPTransitionPeekIvar;
+static CGRect (*TPOriginalSnapshotFrame)(id, SEL, NSInteger, id, NSInteger);
+static CGRect (*TPOriginalPageFrame)(id, SEL, NSUInteger);
+static BOOL TPDockPageAnchorEnabled, TPDockPageAnchorInstalled;
+static BOOL TPExitSnapshotEnabled, TPExitSnapshotCompatible;
+static CGRect (*TPOriginalSwitcherFallbackFrame)(id, SEL, NSInteger, id, CGRect);
+static BOOL TPSwitcherGeometryEnabled, TPSwitcherGeometryInstalled;
+static void (*TPOriginalGestureBegan)(id, SEL, id);
+static BOOL TPGestureStartAnchorEnabled, TPGestureStartAnchorInstalled, TPPreparingGestureStart;
+static BOOL TPActiveHandles(id *first, id *second);
+static void (*TPOriginalDropUpdate)(id, SEL, id);
+static void (*TPOriginalDropPlan)(id, SEL);
+static Ivar TPDropActionIvar, TPDropInitialStateIvar, TPDropControllerIvar, TPDropProposedStateIvar;
+static __unsafe_unretained id TPDropTransactionScope, TPDropSessionScope;
+static char TPDropPlanCacheKey;
+typedef struct { CGRect viewport, bounds, original, result; NSInteger role; BOOL overridden; const char *path; CFAbsoluteTime time; } TPHostSample;
+static TPHostSample TPHostSamples[256];
+static NSUInteger TPHostSampleCount;
+static NSUInteger TPHostSampleDropped;
+static BOOL TPTraceHostFrames;
+typedef struct { CGPoint point; NSInteger original, target; BOOL reused; CFAbsoluteTime time; } TPDropSample;
+static TPDropSample TPDropSamples[128];
+static NSUInteger TPDropSampleCount;
+
+static void TPRecordDrop(CGPoint point, NSInteger original, NSInteger target, BOOL reused) {
+    if (TPTraceHostFrames && TPDropSampleCount < 128)
+        TPDropSamples[TPDropSampleCount++] = (TPDropSample){point, original, target, reused, CFAbsoluteTimeGetCurrent()};
+}
+
+static CGRect TPRecordHostFrame(const char *path, CGRect viewport, CGRect bounds, CGRect original, CGRect result, NSInteger role, BOOL overridden) {
+    if (TPTraceHostFrames) {
+        if (TPHostSampleCount < 256) TPHostSamples[TPHostSampleCount++] = (TPHostSample){viewport, bounds, original, result, role, overridden, path, CFAbsoluteTimeGetCurrent()};
+        else TPHostSampleDropped++;
+    }
+    return result;
+}
+static id TPObject(id object, const char *name) {
+    SEL selector = sel_registerName(name);
+    return [object respondsToSelector:selector] ? ((id (*)(id, SEL))objc_msgSend)(object, selector) : nil;
+}
+
+static BOOL TPSplitPair(id layout, NSInteger role) {
+    if (role != 1 && role != 2) return NO;
+    SEL split = sel_registerName("isSplitConfiguration");
+    SEL item = sel_registerName("itemForLayoutRole:");
+    if (![layout respondsToSelector:split] || ![layout respondsToSelector:item]) return NO;
+    if (!((BOOL (*)(id, SEL))objc_msgSend)(layout, split)) return NO;
+    id items = TPObject(layout, "allItems");
+    if (![items isKindOfClass:[NSArray class]] || [items count] != 2) return NO;
+    return ((id (*)(id, SEL, NSInteger))objc_msgSend)(layout, item, 1) != nil &&
+           ((id (*)(id, SEL, NSInteger))objc_msgSend)(layout, item, 2) != nil;
+}
+
+static UIWindowScene *TPMainScene(void) {
+    id workspace = TPObject((id)objc_getClass("SBMainWorkspace"), "sharedInstanceIfExists");
+    id scene = TPObject(workspace, "mainWindowScene");
+    return [scene isKindOfClass:[UIWindowScene class]] ? scene : nil;
+}
+
+static BOOL TPSinglePrimary(id layout, NSInteger role) {
+    if (role != 1) return NO;
+    id items = TPObject(layout, "allItems");
+    return [items isKindOfClass:[NSArray class]] && [items count] == 1;
+}
+
+static NSInteger TPInteger(id object, const char *name) {
+    return ((NSInteger (*)(id, SEL))objc_msgSend)(object, sel_registerName(name));
+}
+
+static NSInteger TPVerticalRoleForPeek(NSInteger peek, NSInteger space) {
+    // 20B101: primary/side picker states, with native narrow/wide,
+    // wide/narrow or half/half split configurations. Single item stays role 1.
+    if (space < 2 || space > 4) return 0;
+    return peek == 2 ? 1 : (peek == 3 ? 2 : 0);
+}
+
+static NSInteger TPPlaceholderRealRole(id layout) {
+    if (!TPSplitPair(layout, 1)) return 0;
+    for (NSInteger role = 1; role <= 2; role++) {
+        id item = ((id (*)(id, SEL, NSInteger))objc_msgSend)(layout, sel_registerName("itemForLayoutRole:"), role);
+        if ([TPObject(item, "bundleIdentifier") isEqual:@"com.apple.springboard.PeekPlacholderItem"]) return role == 1 ? 2 : 1;
+    }
+    return 0;
+}
+
+static NSInteger TPPeekSceneRole(id layout, NSInteger role) {
+    if (!TPPreviewEnabled) return 0;
+    NSInteger realRole = TPPlaceholderRealRole(layout);
+    if (!TPSinglePrimary(layout, role) && (!realRole || role != realRole)) return 0;
+    if (TPBuildingPeekRole) return TPBuildingPeekRole;
+    id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
+    id state = TPObject(coordinator, "layoutState");
+    // Values observed in the native portrait second-App picker on 20B101.
+    if (!state || (!realRole && ![TPObject(state, "appLayout") isEqual:layout])) return 0;
+    return TPVerticalRoleForPeek(TPInteger(state, "peekConfiguration"), TPInteger(state, "spaceConfiguration"));
+}
+
+static BOOL TPFrame(CGRect viewport, NSInteger role, CGRect *result) {
+    if (viewport.size.height <= viewport.size.width) return NO;
+    TPVerticalLayout layout;
+    TPRect rect = {viewport.origin.x, viewport.origin.y, viewport.size.width, viewport.size.height};
+    double step = UIScreen.mainScreen.scale == 2 ? 0.5 : 1.0;
+    if (!TPComputeAlignedVerticalLayout(rect, rect.y + rect.height * TPDividerRatio, 2, 151, 1, step, &layout)) return NO;
+    TPRect pane = role == 1 ? layout.upper : layout.lower;
+    *result = CGRectMake(pane.x, pane.y, pane.width, pane.height);
+    return YES;
+}
+
+static BOOL TPHostPaneFrame(CGRect viewport, CGRect bounds, NSInteger role, CGRect *result) {
+    CGRect pane;
+    if (!TPFrame(viewport, role, &pane)) return NO;
+    TPRect source = {viewport.origin.x, viewport.origin.y, viewport.size.width, viewport.size.height};
+    TPRect target = {bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height};
+    TPRect livePane = {pane.origin.x, pane.origin.y, pane.size.width, pane.size.height};
+    TPRect projected;
+    if (!TPProjectVerticalPane(source, target, livePane, &projected)) return NO;
+    *result = CGRectMake(projected.x, projected.y, projected.width, projected.height);
+    return YES;
+}
+
+static CGRect TPSceneFrame(id self, SEL cmd, NSInteger role, id layout, NSInteger orientation, id scene) {
+    CGRect original = TPOriginalSceneFrame(self, cmd, role, layout, orientation, scene);
+    if (![NSThread isMainThread] || orientation != UIInterfaceOrientationPortrait) return original;
+    NSInteger peekRole = TPPeekSceneRole(layout, role);
+    if (!TPSplitPair(layout, role) && !peekRole) return original;
+    if (![scene isKindOfClass:[UIWindowScene class]] || [(UIWindowScene *)scene screen] != UIScreen.mainScreen) return original;
+    CGRect result;
+    return TPFrame([(UIWindowScene *)scene coordinateSpace].bounds, peekRole ?: role, &result) ? result : original;
+}
+
+static CGRect TPHostFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bounds) {
+    CGRect original = TPOriginalHostFrame(self, cmd, role, layout, bounds);
+    if (![NSThread isMainThread] || object_getClass(self) != objc_getClass("SBSplitViewRootSwitcherModifier") || !TPSplitPair(layout, role)) return original;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    CGRect viewport = scene.coordinateSpace.bounds;
+    CGRect result;
+    BOOL projected = TPHostPaneFrame(viewport, bounds, role, &result);
+    return TPRecordHostFrame("split", viewport, bounds, original, projected ? result : original, role, projected);
+}
+
+static BOOL TPEncoding(Class cls, SEL selector, const char *expected) {
+    Method method = class_getInstanceMethod(cls, selector);
+    return method && method_getTypeEncoding(method) && strcmp(method_getTypeEncoding(method), expected) == 0;
+}
+
+static CGRect TPSwitcherFallbackFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bounds) {
+    CGRect original = TPOriginalSwitcherFallbackFrame(self, cmd, role, layout, bounds);
+    if (![NSThread isMainThread] || object_getClass(self) != objc_getClass("SBDefaultImplementationsSwitcherModifier") ||
+        !TPSplitPair(layout, role) || TPPlaceholderRealRole(layout)) return original;
+    // Match the main coordinator's pair rather than issuing cached modifier
+    // queries for display or orientation from an unrelated query context.
+    id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
+    if (![layout isEqual:TPObject(TPObject(coordinator, "layoutState"), "appLayout")]) return original;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    // Grid layout and page-view layout can query this concrete fallback
+    // directly, without passing through SBSplitViewRootSwitcherModifier.
+    CGRect viewport = scene.coordinateSpace.bounds, result;
+    BOOL changed = TPSwitcherGeometryEnabled && TPHostPaneFrame(viewport, bounds, role, &result);
+    return TPRecordHostFrame("switcher-fallback", viewport, bounds, original, changed ? result : original, role, changed);
+}
+
+static id TPLayoutState(id self, SEL cmd, id context) {
+    if (![NSThread isMainThread]) return TPOriginalLayoutState(self, cmd, context);
+    NSInteger previous = TPBuildingPeekRole;
+    TPBuildingPeekRole = TPVerticalRoleForPeek(TPInteger(context, "requestedPeekConfiguration"), TPInteger(context, "requestedSpaceConfiguration"));
+    @try { return TPOriginalLayoutState(self, cmd, context); }
+    @finally { TPBuildingPeekRole = previous; }
+}
+
+static NSInteger TPIvarInteger(id object, Ivar ivar) {
+    NSInteger value;
+    memcpy(&value, (const char *)(__bridge const void *)object + ivar_getOffset(ivar), sizeof(value));
+    return value;
+}
+
+static CGRect TPPeekFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bounds) {
+    CGRect original = TPOriginalPeekFrame(self, cmd, role, layout, bounds);
+    if (![NSThread isMainThread] || !TPSinglePrimary(layout, role) ||
+        object_getClass(self) != objc_getClass("SBPeekSplitViewRoutingSwitcherModifier") ||
+        ![object_getIvar(self, TPPeekingLayoutIvar) isEqual:layout]) return original;
+    NSInteger peekRole = TPVerticalRoleForPeek(TPIvarInteger(self, TPPeekConfigurationIvar), TPIvarInteger(self, TPSpaceConfigurationIvar));
+    if (!peekRole) return original;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    CGRect viewport = scene.coordinateSpace.bounds;
+    CGRect result;
+    BOOL projected = TPHostPaneFrame(viewport, bounds, peekRole, &result);
+    return TPRecordHostFrame("peek", viewport, bounds, original, projected ? result : original, peekRole, projected);
+}
+
+static CGRect TPFullScreenPeekFrame(id self, SEL cmd, NSInteger role, id layout, CGRect bounds) {
+    CGRect original = TPOriginalFullScreenPeekFrame(self, cmd, role, layout, bounds);
+    if (![NSThread isMainThread] || role != TPPlaceholderRealRole(layout) ||
+        !((BOOL (*)(id, SEL, id))objc_msgSend)(self, sel_registerName("_isPeekingAppLayout:"), layout)) return original;
+    NSInteger peekRole = TPVerticalRoleForPeek(TPIvarInteger(self, TPTransitionPeekIvar), 4);
+    UIWindowScene *scene = TPMainScene();
+    if (!peekRole || !scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    CGRect viewport = scene.coordinateSpace.bounds;
+    CGRect result;
+    BOOL projected = TPHostPaneFrame(viewport, bounds, peekRole, &result);
+    return TPRecordHostFrame("fullscreen-to-peek", viewport, bounds, original, projected ? result : original, peekRole, projected);
+}
+
+static BOOL TPOwnMethod(Class cls, SEL selector) {
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    BOOL found = NO;
+    for (unsigned int i = 0; i < count; i++) if (method_getName(methods[i]) == selector) found = YES;
+    free(methods);
+    return found;
+}
+
+static void TPStartPeekPreview(void) {
+    if (!CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalPeekEnabled"), CFSTR("com.apple.springboard"), NULL)) return;
+    Class manager = objc_getClass("SBMainDisplayLayoutStateManager");
+    Class modifier = objc_getClass("SBPeekSplitViewRoutingSwitcherModifier");
+    Class context = objc_getClass("SBWorkspaceApplicationSceneTransitionContext");
+    Class state = objc_getClass("SBMainDisplayLayoutState");
+    Class transition = objc_getClass("SBFullScreenToPeekSwitcherModifier");
+    SEL stateSelector = sel_registerName("_layoutStateForApplicationTransitionContext:");
+    SEL frameSelector = sel_registerName("frameForLayoutRole:inAppLayout:withBounds:");
+    TPPeekConfigurationIvar = class_getInstanceVariable(modifier, "_peekConfiguration");
+    TPSpaceConfigurationIvar = class_getInstanceVariable(modifier, "_spaceConfiguration");
+    TPPeekingLayoutIvar = class_getInstanceVariable(modifier, "_peekingAppLayout");
+    TPTransitionPeekIvar = class_getInstanceVariable(transition, "_peekConfiguration");
+    if (!TPEncoding(manager, stateSelector, "@24@0:8@16") || !TPOwnMethod(manager, stateSelector) ||
+        !TPEncoding(modifier, frameSelector, "{CGRect={CGPoint=dd}{CGSize=dd}}64@0:8q16@24{CGRect={CGPoint=dd}{CGSize=dd}}32") ||
+        !TPOwnMethod(modifier, frameSelector) ||
+        !TPEncoding(transition, frameSelector, "{CGRect={CGPoint=dd}{CGSize=dd}}64@0:8q16@24{CGRect={CGPoint=dd}{CGSize=dd}}32") ||
+        !TPOwnMethod(transition, frameSelector) ||
+        !TPEncoding(transition, sel_registerName("_isPeekingAppLayout:"), "B24@0:8@16") ||
+        !TPEncoding(objc_getClass("SBDisplayItem"), sel_registerName("bundleIdentifier"), "@16@0:8") ||
+        !TPEncoding(context, sel_registerName("requestedPeekConfiguration"), "q16@0:8") ||
+        !TPEncoding(context, sel_registerName("requestedSpaceConfiguration"), "q16@0:8") ||
+        !TPEncoding(state, sel_registerName("peekConfiguration"), "q16@0:8") ||
+        !TPEncoding(state, sel_registerName("spaceConfiguration"), "q16@0:8") ||
+        !TPPeekConfigurationIvar || !TPSpaceConfigurationIvar || !TPPeekingLayoutIvar || !TPTransitionPeekIvar ||
+        strcmp(ivar_getTypeEncoding(TPTransitionPeekIvar), "q") != 0 ||
+        strcmp(ivar_getTypeEncoding(TPPeekConfigurationIvar), "q") != 0 ||
+        strcmp(ivar_getTypeEncoding(TPSpaceConfigurationIvar), "q") != 0 ||
+        strcmp(ivar_getTypeEncoding(TPPeekingLayoutIvar), "@\"SBAppLayout\"") != 0) {
+        NSLog(@"[TrollPadVertical] Peek preview disabled: runtime ABI mismatch");
+        return;
+    }
+    MSHookMessageEx(manager, stateSelector, (IMP)TPLayoutState, (IMP *)&TPOriginalLayoutState);
+    MSHookMessageEx(modifier, frameSelector, (IMP)TPPeekFrame, (IMP *)&TPOriginalPeekFrame);
+    MSHookMessageEx(transition, frameSelector, (IMP)TPFullScreenPeekFrame, (IMP *)&TPOriginalFullScreenPeekFrame);
+    TPPreviewEnabled = YES;
+}
+
+static id TPCurrentAppLayout(void) {
+    id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
+    return TPObject(TPObject(coordinator, "layoutState"), "appLayout");
+}
+
+static NSInteger TPPaneForLeafInPair(id leaf, id pair) {
+    if (!TPSinglePrimary(leaf, 1)) return 0;
+    if (!TPSplitPair(pair, 1) || TPPlaceholderRealRole(pair)) return 0;
+    SEL item = sel_registerName("itemForLayoutRole:");
+    id displayItem = ((id (*)(id, SEL, NSInteger))objc_msgSend)(leaf, item, 1);
+    for (NSInteger role = 1; role <= 2; role++) {
+        id candidate = ((id (*)(id, SEL, NSInteger))objc_msgSend)(pair, item, role);
+        if ([candidate isEqual:displayItem]) return role;
+    }
+    return 0;
+}
+
+static NSInteger TPCurrentPaneForLeaf(id leaf, BOOL *fromTransition) {
+    NSInteger role = TPPaneForLeafInPair(leaf, TPCurrentAppLayout());
+    if (role || !TPExitSnapshotEnabled) return role;
+    // During a split-to-Home transition the current layout is already empty,
+    // while the outgoing leaf snapshots still belong to the transition's pair.
+    // Read only that live context; do not retain a previous foreground layout.
+    id coordinator = TPObject(TPMainScene(), "layoutStateTransitionCoordinator");
+    if (!((BOOL (*)(id, SEL))objc_msgSend)(coordinator, sel_registerName("isTransitioning"))) return 0;
+    id context = TPObject(coordinator, "transitionContext");
+    id pair = TPObject(TPObject(context, "fromLayoutState"), "appLayout");
+    role = TPPaneForLeafInPair(leaf, pair);
+    if (role && fromTransition) *fromTransition = YES;
+    return role;
+}
+
+static CGRect TPSnapshotFrame(id self, SEL cmd, NSInteger role, id layout, NSInteger orientation) {
+    CGRect original = TPOriginalSnapshotFrame(self, cmd, role, layout, orientation);
+    if (![NSThread isMainThread] || orientation != UIInterfaceOrientationPortrait) return original;
+    UIView *view = self;
+    if (view.window && view.window.screen != UIScreen.mainScreen) return original;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    CGRect viewport = scene.coordinateSpace.bounds;
+    NSInteger peekRole = TPPeekSceneRole(layout, role);
+    CGRect result;
+    if (TPSplitPair(layout, role) || peekRole) {
+        if (!view.window && ![layout isEqual:TPCurrentAppLayout()] && !peekRole) return original;
+        if (!TPFrame(viewport, peekRole ?: role, &result)) return original;
+        return TPRecordHostFrame("snapshot-pair", viewport, view.bounds, original, result, peekRole ?: role, YES);
+    }
+    // The switcher can promote each item of a pair into a single-App card.
+    // Its live scene still has pane dimensions: retain the card's native
+    // origin/width, but never stretch that image to a full-height scene.
+    BOOL fromTransition = NO;
+    NSInteger paneRole = role == 1 ? TPCurrentPaneForLeaf(layout, &fromTransition) : 0;
+    CGRect pane;
+    if (!paneRole || !TPFrame(viewport, paneRole, &pane)) return original;
+    TPRect live = {pane.origin.x, pane.origin.y, pane.size.width, pane.size.height};
+    TPRect native = {original.origin.x, original.origin.y, original.size.width, original.size.height};
+    TPRect fitted;
+    if (!TPVerticalSnapshotFrame(live, native, &fitted)) return original;
+    result = CGRectMake(fitted.x, fitted.y, fitted.width, fitted.height);
+    return TPRecordHostFrame(fromTransition ? "snapshot-leaf-exit" : "snapshot-leaf", viewport, view.bounds, original, result, paneRole, YES);
+}
+
+static BOOL TPDropTargetAction(id transaction, id session, NSInteger *action, CGRect *bounds, CGPoint *locationOut) {
+    if (!session || transaction != TPDropTransactionScope || ![NSThread isMainThread]) return NO;
+    NSInteger nativeAction = TPIvarInteger(transaction, TPDropActionIvar);
+    // 20B101: 4/5 request primary/side Split View; 6/7 are floating-role
+    // actions. Normalize the source proposal, before either preview or commit.
+    if (nativeAction < 2 || nativeAction > 7) return NO;
+    id initial = TPObject(object_getIvar(transaction, TPDropInitialStateIvar), "appLayout");
+    if (!TPSplitPair(initial, 1) || TPPlaceholderRealRole(initial)) return NO;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return NO;
+    id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
+    id lock = TPObject((id)objc_getClass("SBLockScreenManager"), "sharedInstanceIfExists");
+    SEL visible = sel_registerName("isMainSwitcherVisible"), locked = sel_registerName("isUILocked");
+    if (!TPEncoding(object_getClass(coordinator), visible, "B16@0:8") ||
+        !TPEncoding(object_getClass(lock), locked, "B16@0:8") ||
+        ((BOOL (*)(id, SEL))objc_msgSend)(coordinator, visible) ||
+        ((BOOL (*)(id, SEL))objc_msgSend)(lock, locked)) return NO;
+    id controller = object_getIvar(transaction, TPDropControllerIvar);
+    UIView *view = TPObject(controller, "view");
+    SEL location = sel_registerName("locationInView:");
+    if (![view isKindOfClass:UIView.class] || view.window.screen != UIScreen.mainScreen ||
+        !TPEncoding(object_getClass(session), location, "{CGPoint=dd}24@0:8@16")) return NO;
+    CGRect container = view.bounds, viewport = scene.coordinateSpace.bounds;
+    if (fabs(container.size.width - viewport.size.width) > 0.5 ||
+        fabs(container.size.height - viewport.size.height) > 0.5) return NO;
+    CGPoint point = ((CGPoint (*)(id, SEL, id))objc_msgSend)(session, location, view);
+    TPVerticalLayout layout;
+    TPRect rect = {container.origin.x, container.origin.y, container.size.width, container.size.height};
+    double step = UIScreen.mainScreen.scale == 2 ? 0.5 : 1.0;
+    if (!TPComputeAlignedVerticalLayout(rect, rect.y + rect.height * TPDividerRatio, 2, 151, 1, step, &layout)) return NO;
+    int role = TPVerticalRoleAtPoint(&layout, point.x, point.y);
+    if (!role) return NO;
+    *action = role == 1 ? 4 : 5;
+    *bounds = container;
+    *locationOut = point;
+    return YES;
+}
+
+static void TPDropPlan(id self, SEL cmd) {
+    NSInteger action;
+    CGRect bounds;
+    CGPoint point;
+    if (!TPDropTargetAction(self, TPDropSessionScope, &action, &bounds, &point)) {
+        objc_setAssociatedObject(self, &TPDropPlanCacheKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        TPOriginalDropPlan(self, cmd);
+        return;
+    }
+    NSInteger native = TPIvarInteger(self, TPDropActionIvar);
+    memcpy((char *)(__bridge void *)self + ivar_getOffset(TPDropActionIvar), &action, sizeof(action));
+    id proposed = object_getIvar(self, TPDropProposedStateIvar);
+    NSArray *cached = objc_getAssociatedObject(self, &TPDropPlanCacheKey);
+    if (native != action && cached.count == 3 && [cached[0] integerValue] == action &&
+        CGRectEqualToRect([cached[1] CGRectValue], bounds) && cached[2] == proposed) {
+        TPRecordDrop(point, native, action, YES);
+        return;
+    }
+    TPOriginalDropPlan(self, cmd);
+    TPRecordDrop(point, native, action, NO);
+    proposed = object_getIvar(self, TPDropProposedStateIvar);
+    if (proposed) objc_setAssociatedObject(self, &TPDropPlanCacheKey,
+        @[@(action), [NSValue valueWithCGRect:bounds], proposed], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void TPDropUpdate(id self, SEL cmd, id session) {
+    if (![NSThread isMainThread]) { TPOriginalDropUpdate(self, cmd, session); return; }
+    id previousTransaction = TPDropTransactionScope, previousSession = TPDropSessionScope;
+    TPDropTransactionScope = self;
+    TPDropSessionScope = session;
+    @try {
+        TPOriginalDropUpdate(self, cmd, session);
+        // Native caching can skip proposal rebuilding when x stays in the
+        // same zone. Crossing the vertical divider must still change panes.
+        NSInteger action;
+        CGRect bounds;
+        CGPoint point;
+        if (TPDropTargetAction(self, session, &action, &bounds, &point) &&
+            TPIvarInteger(self, TPDropActionIvar) != action)
+            TPDropPlan(self, sel_registerName("_updateCurrentDropActionProposedLayoutState"));
+    }
+    @finally { TPDropTransactionScope = previousTransaction; TPDropSessionScope = previousSession; }
+}
+
+static BOOL TPIvarType(Ivar ivar, const char *types) {
+    return ivar && ivar_getTypeEncoding(ivar) && strcmp(ivar_getTypeEncoding(ivar), types) == 0;
+}
+
+static CGRect TPPageFrame(id self, SEL cmd, NSUInteger index) {
+    CGRect original = TPOriginalPageFrame(self, cmd, index);
+    if ((!TPTraceHostFrames && !TPDockPageAnchorEnabled) || ![NSThread isMainThread] ||
+        object_getClass(self) != objc_getClass("SBiPadOSPlatformSwitcherModifier")) return original;
+    id pair = TPCurrentAppLayout();
+    if (!TPSplitPair(pair, 1) || TPPlaceholderRealRole(pair)) return original;
+    id layouts = TPObject(self, "appLayouts");
+    if (![layouts isKindOfClass:[NSArray class]] || index >= [layouts count] || ![layouts[index] isEqual:pair]) return original;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return original;
+    CGRect viewport = scene.coordinateSpace.bounds;
+    id dock = TPObject(scene, "floatingDockController");
+    BOOL presented = [dock isKindOfClass:objc_getClass("SBFloatingDockController")] &&
+        ((BOOL (*)(id, SEL))objc_msgSend)(dock, sel_registerName("isFloatingDockPresented"));
+    TPRect anchored;
+    BOOL changed = TPDockPageAnchorEnabled && (presented || TPPreparingGestureStart) && TPActiveHandles(NULL, NULL) &&
+        TPAnchorVerticalDockPage((TPRect){viewport.origin.x, viewport.origin.y, viewport.size.width, viewport.size.height},
+                                (TPRect){original.origin.x, original.origin.y, original.size.width, original.size.height}, &anchored);
+    CGRect result = changed ? CGRectMake(anchored.x, anchored.y, anchored.width, anchored.height) : original;
+    return TPRecordHostFrame(TPPreparingGestureStart ? "page-gesture-start" : (presented ? "page-dock" : "page-native"), viewport, viewport, original, result, (NSInteger)index, changed);
+}
+
+static void TPGestureBegan(id self, SEL cmd, id gesture) {
+    // The interactive transition reads its source page before the Dock is
+    // presented. Keep that synchronous source read consistent with the live
+    // split, rather than changing an animation after its source was captured.
+    if (!TPGestureStartAnchorEnabled || !TPDockPageAnchorEnabled || ![NSThread isMainThread] ||
+        object_getClass(self) != objc_getClass("SBFluidSwitcherGestureManager") ||
+        ![gesture isKindOfClass:objc_getClass("SBFluidSwitcherScreenEdgePanGestureRecognizer")] ||
+        [(UIGestureRecognizer *)gesture state] != UIGestureRecognizerStateBegan ||
+        !TPActiveHandles(NULL, NULL)) {
+        TPOriginalGestureBegan(self, cmd, gesture);
+        return;
+    }
+    BOOL previous = TPPreparingGestureStart;
+    TPPreparingGestureStart = YES;
+    CGRect viewport = TPMainScene().coordinateSpace.bounds;
+    TPRecordHostFrame("gesture-start", viewport, viewport, viewport, viewport, 0, NO);
+    @try { TPOriginalGestureBegan(self, cmd, gesture); }
+    @finally { TPPreparingGestureStart = previous; }
+}
+
+static void TPStartTransitionGeometry(void) {
+    if (!TPPreviewEnabled) return;
+    TPExitSnapshotCompatible =
+        TPEncoding(objc_getClass("SBWindowScene"), sel_registerName("layoutStateTransitionCoordinator"), "@16@0:8") &&
+        TPEncoding(objc_getClass("SBLayoutStateTransitionCoordinator"), sel_registerName("isTransitioning"), "B16@0:8") &&
+        TPEncoding(objc_getClass("SBLayoutStateTransitionCoordinator"), sel_registerName("transitionContext"), "@16@0:8") &&
+        TPEncoding(objc_getClass("SBLayoutStateTransitionContext"), sel_registerName("fromLayoutState"), "@16@0:8") &&
+        TPEncoding(objc_getClass("SBMainDisplayLayoutState"), sel_registerName("appLayout"), "@16@0:8");
+    TPExitSnapshotEnabled = TPExitSnapshotCompatible &&
+        CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalExitSnapshotEnabled"), CFSTR("com.apple.springboard"), NULL);
+    Class fallback = objc_getClass("SBDefaultImplementationsSwitcherModifier");
+    SEL fallbackFrame = sel_registerName("frameForLayoutRole:inAppLayout:withBounds:");
+    if (TPEncoding(fallback, fallbackFrame, "{CGRect={CGPoint=dd}{CGSize=dd}}64@0:8q16@24{CGRect={CGPoint=dd}{CGSize=dd}}32") &&
+        TPOwnMethod(fallback, fallbackFrame)) {
+        MSHookMessageEx(fallback, fallbackFrame, (IMP)TPSwitcherFallbackFrame, (IMP *)&TPOriginalSwitcherFallbackFrame);
+        TPSwitcherGeometryInstalled = YES;
+        TPSwitcherGeometryEnabled = CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalSwitcherGeometryEnabled"), CFSTR("com.apple.springboard"), NULL);
+    } else NSLog(@"[TrollPadVertical] Switcher fallback geometry disabled: runtime ABI/ownership mismatch");
+    Class root = objc_getClass("SBiPadOSPlatformSwitcherModifier");
+    SEL page = sel_registerName("frameForIndex:");
+    const char *pageTypes = "{CGRect={CGPoint=dd}{CGSize=dd}}24@0:8Q16";
+    if (TPEncoding(root, page, pageTypes) && TPEncoding(root, sel_registerName("appLayouts"), "@16@0:8") &&
+        TPEncoding(objc_getClass("SBWindowScene"), sel_registerName("floatingDockController"), "@16@0:8") &&
+        TPEncoding(objc_getClass("SBFloatingDockController"), sel_registerName("isFloatingDockPresented"), "B16@0:8") &&
+        !TPOwnMethod(root, page) && class_addMethod(root, page, method_getImplementation(class_getInstanceMethod(root, page)), pageTypes)) {
+        MSHookMessageEx(root, page, (IMP)TPPageFrame, (IMP *)&TPOriginalPageFrame);
+        TPDockPageAnchorInstalled = YES;
+        TPDockPageAnchorEnabled = CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalDockAnchorEnabled"), CFSTR("com.apple.springboard"), NULL);
+    } else NSLog(@"[TrollPadVertical] Dock page anchoring disabled: runtime ABI/ownership mismatch");
+    Class gestureManager = objc_getClass("SBFluidSwitcherGestureManager");
+    Class edgeGesture = objc_getClass("SBFluidSwitcherScreenEdgePanGestureRecognizer");
+    SEL began = sel_registerName("_handleSwitcherPanGestureBegan:");
+    if (TPDockPageAnchorInstalled && edgeGesture &&
+        TPEncoding(edgeGesture, @selector(state), "q16@0:8") &&
+        TPEncoding(gestureManager, began, "v24@0:8@16") && TPOwnMethod(gestureManager, began)) {
+        MSHookMessageEx(gestureManager, began, (IMP)TPGestureBegan, (IMP *)&TPOriginalGestureBegan);
+        TPGestureStartAnchorInstalled = YES;
+        TPGestureStartAnchorEnabled = CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalGestureStartAnchorEnabled"), CFSTR("com.apple.springboard"), NULL);
+    } else NSLog(@"[TrollPadVertical] Gesture source anchoring disabled: runtime ABI/ownership mismatch");
+    Class snapshot = objc_getClass("SBAppSwitcherReusableSnapshotView");
+    SEL frame = sel_registerName("_frameInLayoutSpaceForRole:inAppLayout:inOrientation:");
+    if (TPEncoding(snapshot, frame, "{CGRect={CGPoint=dd}{CGSize=dd}}40@0:8q16@24q32") && TPOwnMethod(snapshot, frame))
+        MSHookMessageEx(snapshot, frame, (IMP)TPSnapshotFrame, (IMP *)&TPOriginalSnapshotFrame);
+    else NSLog(@"[TrollPadVertical] Snapshot geometry disabled: runtime ABI mismatch");
+    Class drop = objc_getClass("SBDragAndDropWorkspaceTransaction");
+    SEL update = sel_registerName("_updateCurrentDropActionForSession:");
+    SEL plan = sel_registerName("_updateCurrentDropActionProposedLayoutState");
+    TPDropActionIvar = class_getInstanceVariable(drop, "_currentDropAction");
+    TPDropInitialStateIvar = class_getInstanceVariable(drop, "_initialLayoutState");
+    TPDropControllerIvar = class_getInstanceVariable(drop, "_switcherContentController");
+    TPDropProposedStateIvar = class_getInstanceVariable(drop, "_currentDropActionProposedLayoutState");
+    if (!TPEncoding(drop, update, "v24@0:8@16") || !TPOwnMethod(drop, update) ||
+        !TPEncoding(drop, plan, "v16@0:8") || !TPOwnMethod(drop, plan) ||
+        !TPIvarType(TPDropActionIvar, "q") ||
+        !TPIvarType(TPDropInitialStateIvar, "@\"SBMainDisplayLayoutState\"") ||
+        !TPIvarType(TPDropControllerIvar, "@\"SBFluidSwitcherViewController\"") ||
+        !TPIvarType(TPDropProposedStateIvar, "@\"SBMainDisplayLayoutState\"") ||
+        !TPEncoding(objc_getClass("SBMainDisplayLayoutState"), sel_registerName("appLayout"), "@16@0:8")) {
+        NSLog(@"[TrollPadVertical] Drop targeting disabled: runtime ABI mismatch");
+        return;
+    }
+    MSHookMessageEx(drop, plan, (IMP)TPDropPlan, (IMP *)&TPOriginalDropPlan);
+    MSHookMessageEx(drop, update, (IMP)TPDropUpdate, (IMP *)&TPOriginalDropUpdate);
+}
+
+// Research entry point: change only the layout proposal. Scene negotiation is
+// deliberately left to an observed native App Switcher activation/dismissal.
+@interface NSObject (TPVerticalTransactionResearch)
+- (instancetype)initWithApplicationSceneHandle:(id)handle;
+- (BOOL)requestTransitionWithBuilder:(void (^)(id request))builder;
+- (id)applicationContext;
+- (void)setEntity:(id)entity forLayoutRole:(NSInteger)role;
+- (void)setRequestedSpaceConfiguration:(NSInteger)configuration;
+- (void)setAnimationDisabled:(BOOL)disabled;
+- (void)_notifySwitcherControllersAppLayoutsDidChange;
+@end
+
+@interface TPVerticalResearch : NSObject
++ (BOOL)enableDockPageAnchoring:(BOOL)enabled;
++ (BOOL)enableExitSnapshotContinuity:(BOOL)enabled;
++ (BOOL)enableSwitcherGeometry:(BOOL)enabled;
++ (BOOL)enableGestureStartAnchoring:(BOOL)enabled;
++ (double)dividerRatio;
++ (BOOL)prepareDividerRatio:(double)ratio;
++ (BOOL)requestRatio:(double)ratio primaryHandle:(id)primary secondaryHandle:(id)secondary;
+@end
+
+@implementation TPVerticalResearch
++ (BOOL)enableGestureStartAnchoring:(BOOL)enabled {
+    if (![NSThread isMainThread] || !TPRuntimeInstalled || !TPGestureStartAnchorInstalled) return NO;
+    CFPreferencesAppSynchronize(CFSTR("com.apple.springboard"));
+    TPGestureStartAnchorEnabled = enabled && CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalGestureStartAnchorEnabled"), CFSTR("com.apple.springboard"), NULL);
+    return TPGestureStartAnchorEnabled;
+}
++ (BOOL)enableSwitcherGeometry:(BOOL)enabled {
+    if (![NSThread isMainThread] || !TPRuntimeInstalled || !TPSwitcherGeometryInstalled) return NO;
+    CFPreferencesAppSynchronize(CFSTR("com.apple.springboard"));
+    TPSwitcherGeometryEnabled = enabled && CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalSwitcherGeometryEnabled"), CFSTR("com.apple.springboard"), NULL);
+    return TPSwitcherGeometryEnabled;
+}
++ (BOOL)enableExitSnapshotContinuity:(BOOL)enabled {
+    if (![NSThread isMainThread] || !TPRuntimeInstalled || !TPExitSnapshotCompatible) return NO;
+    CFPreferencesAppSynchronize(CFSTR("com.apple.springboard"));
+    TPExitSnapshotEnabled = enabled && CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalExitSnapshotEnabled"), CFSTR("com.apple.springboard"), NULL);
+    return TPExitSnapshotEnabled;
+}
++ (BOOL)enableDockPageAnchoring:(BOOL)enabled {
+    if (![NSThread isMainThread] || !TPRuntimeInstalled || !TPDockPageAnchorInstalled) return NO;
+    CFPreferencesAppSynchronize(CFSTR("com.apple.springboard"));
+    TPDockPageAnchorEnabled = enabled && CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalDockAnchorEnabled"), CFSTR("com.apple.springboard"), NULL);
+    return TPDockPageAnchorEnabled;
+}
++ (void)setAnimationHostTracingEnabled:(BOOL)enabled {
+    if (![NSThread isMainThread]) return;
+    TPHostSampleCount = 0;
+    TPHostSampleDropped = 0;
+    TPDropSampleCount = 0;
+    TPTraceHostFrames = enabled;
+}
++ (NSDictionary *)animationHostTraceStatus {
+    if (![NSThread isMainThread]) return @{};
+    return @{@"enabled": @(TPTraceHostFrames), @"captured": @(TPHostSampleCount), @"dropped": @(TPHostSampleDropped)};
+}
++ (NSArray *)animationHostTrace {
+    if (![NSThread isMainThread]) return @[];
+    NSMutableArray *samples = [NSMutableArray array];
+    for (NSUInteger i = 0; i < TPHostSampleCount; i++) {
+        TPHostSample s = TPHostSamples[i];
+        [samples addObject:@{@"time": @(s.time), @"path": @(s.path), @"role": @(s.role), @"overridden": @(s.overridden), @"viewport": NSStringFromCGRect(s.viewport), @"bounds": NSStringFromCGRect(s.bounds), @"original": NSStringFromCGRect(s.original), @"result": NSStringFromCGRect(s.result)}];
+    }
+    return samples;
+}
++ (NSArray *)verticalDropTrace {
+    if (![NSThread isMainThread]) return @[];
+    NSMutableArray *samples = [NSMutableArray array];
+    for (NSUInteger i = 0; i < TPDropSampleCount; i++) {
+        TPDropSample s = TPDropSamples[i];
+        [samples addObject:@{@"time": @(s.time), @"point": NSStringFromCGPoint(s.point),
+                            @"originalAction": @(s.original), @"targetAction": @(s.target), @"reusedPlan": @(s.reused)}];
+    }
+    return samples;
+}
++ (double)dividerRatio { return TPDividerRatio; }
++ (BOOL)prepareDividerRatio:(double)ratio {
+    if (!TPRuntimeInstalled || ![NSThread isMainThread] || !isfinite(ratio)) return NO;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return NO;
+    id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
+    id state = TPObject(coordinator, "layoutState");
+    if (!TPSplitPair(TPObject(state, "appLayout"), 1)) return NO;
+    TPDividerRatio = fmax(1.0 / 3, fmin(ratio, 2.0 / 3));
+    return YES;
+}
++ (BOOL)requestRatio:(double)ratio primaryHandle:(id)primary secondaryHandle:(id)secondary {
+    if (!TPDividerEnabled && !CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalResizeResearchEnabled"), CFSTR("com.apple.springboard"), NULL)) return NO;
+    if (!TPRuntimeInstalled || ![NSThread isMainThread] || !isfinite(ratio)) return NO;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return NO;
+    Class handleClass = objc_getClass("SBDeviceApplicationSceneHandle");
+    if (![primary isKindOfClass:handleClass] || ![secondary isKindOfClass:handleClass] || primary == secondary) return NO;
+    if (!TPEncoding(handleClass, sel_registerName("isEffectivelyForeground"), "B16@0:8") ||
+        !TPEncoding(handleClass, sel_registerName("layoutRole"), "q16@0:8")) return NO;
+    SEL foreground = sel_registerName("isEffectivelyForeground");
+    SEL roleSelector = sel_registerName("layoutRole");
+    if (!((BOOL (*)(id, SEL))objc_msgSend)(primary, foreground) ||
+        !((BOOL (*)(id, SEL))objc_msgSend)(secondary, foreground) ||
+        ((NSInteger (*)(id, SEL))objc_msgSend)(primary, roleSelector) != 1 ||
+        ((NSInteger (*)(id, SEL))objc_msgSend)(secondary, roleSelector) != 2) return NO;
+    id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
+    id state = TPObject(coordinator, "layoutState");
+    if (!TPSplitPair(TPObject(state, "appLayout"), 1)) return NO;
+    Class entityClass = objc_getClass("SBDeviceApplicationSceneEntity");
+    Class contextClass = objc_getClass("SBWorkspaceApplicationSceneTransitionContext");
+    Class requestClass = objc_getClass("SBMainWorkspaceTransitionRequest");
+    Class workspaceClass = objc_getClass("SBMainWorkspace");
+    if (!TPEncoding(entityClass, @selector(initWithApplicationSceneHandle:), "@24@0:8@16") ||
+        !TPEncoding(contextClass, @selector(setAnimationDisabled:), "v20@0:8B16") ||
+        !TPEncoding(objc_getClass("SBMainSwitcherControllerCoordinator"), @selector(_notifySwitcherControllersAppLayoutsDidChange), "v16@0:8") ||
+        !TPEncoding(contextClass, @selector(setEntity:forLayoutRole:), "v32@0:8@16q24") ||
+        !TPEncoding(contextClass, @selector(setRequestedSpaceConfiguration:), "v24@0:8q16") ||
+        !TPEncoding(requestClass, @selector(applicationContext), "@16@0:8") ||
+        !TPEncoding(workspaceClass, @selector(requestTransitionWithBuilder:), "B24@0:8@?16") ||
+        !TPEncoding(object_getClass(state), sel_registerName("spaceConfiguration"), "q16@0:8")) return NO;
+    id first = [[entityClass alloc] initWithApplicationSceneHandle:primary];
+    id second = [[entityClass alloc] initWithApplicationSceneHandle:secondary];
+    if (!first || !second) return NO;
+    NSInteger configuration = ((NSInteger (*)(id, SEL))objc_msgSend)(state, sel_registerName("spaceConfiguration"));
+    id workspace = TPObject((id)workspaceClass, "sharedInstanceIfExists");
+    double previous = TPDividerRatio;
+    TPDividerRatio = fmax(1.0 / 3, fmin(ratio, 2.0 / 3));
+    // Compiler-generated ARC Block: do not inject a manually constructed Block.
+    BOOL accepted = [workspace requestTransitionWithBuilder:^(id request) {
+        id context = [request applicationContext];
+        [context setAnimationDisabled:YES];
+        [context setEntity:first forLayoutRole:1];
+        [context setEntity:second forLayoutRole:2];
+        [context setRequestedSpaceConfiguration:configuration];
+    }];
+    if (!accepted) TPDividerRatio = previous;
+    else [coordinator _notifySwitcherControllersAppLayoutsDidChange];
+    NSLog(@"[TrollPadVertical] Research ratio %.4f transaction accepted=%d", TPDividerRatio, accepted);
+    return accepted;
+}
+@end
+
+UIWindowScene *TPVerticalWindowScene(void) {
+    return TPRuntimeInstalled && [NSThread isMainThread] ? TPMainScene() : nil;
+}
+
+BOOL TPVerticalKeyboardVisible(void) {
+    if (!TPRuntimeInstalled || ![NSThread isMainThread]) return YES;
+    Class delegateClass = objc_getClass("UIKeyboardSceneDelegate");
+    SEL active = sel_registerName("activeKeyboardSceneDelegate");
+    SEL showing = sel_registerName("showingKeyboard");
+    if (!TPEncoding(object_getClass(delegateClass), active, "@16@0:8") ||
+        !TPEncoding(delegateClass, showing, "B16@0:8")) return YES;
+    id delegate = ((id (*)(id, SEL))objc_msgSend)((id)delegateClass, active);
+    return delegate && ((BOOL (*)(id, SEL))objc_msgSend)(delegate, showing);
+}
+
+static BOOL TPActiveHandles(id *first, id *second) {
+    if (!TPRuntimeInstalled || ![NSThread isMainThread]) return NO;
+    UIWindowScene *scene = TPMainScene();
+    if (!scene || scene.screen != UIScreen.mainScreen || scene.interfaceOrientation != UIInterfaceOrientationPortrait) return NO;
+    id lock = TPObject((id)objc_getClass("SBLockScreenManager"), "sharedInstanceIfExists");
+    SEL locked = sel_registerName("isUILocked");
+    if (!lock || !TPEncoding(object_getClass(lock), locked, "B16@0:8") ||
+        ((BOOL (*)(id, SEL))objc_msgSend)(lock, locked)) return NO;
+    id coordinator = TPObject((id)objc_getClass("SBMainSwitcherControllerCoordinator"), "sharedInstanceIfExists");
+    SEL visible = sel_registerName("isMainSwitcherVisible");
+    SEL handleSelector = sel_registerName("_deviceApplicationSceneHandleForDisplayItem:");
+    if (!TPEncoding(object_getClass(coordinator), visible, "B16@0:8") ||
+        !TPEncoding(object_getClass(coordinator), handleSelector, "@24@0:8@16") ||
+        ((BOOL (*)(id, SEL))objc_msgSend)(coordinator, visible)) return NO;
+    id layout = TPObject(TPObject(coordinator, "layoutState"), "appLayout");
+    if (!TPSplitPair(layout, 1)) return NO;
+    SEL itemSelector = sel_registerName("itemForLayoutRole:");
+    id firstItem = ((id (*)(id, SEL, NSInteger))objc_msgSend)(layout, itemSelector, 1);
+    id secondItem = ((id (*)(id, SEL, NSInteger))objc_msgSend)(layout, itemSelector, 2);
+    id a = ((id (*)(id, SEL, id))objc_msgSend)(coordinator, handleSelector, firstItem);
+    id b = ((id (*)(id, SEL, id))objc_msgSend)(coordinator, handleSelector, secondItem);
+    SEL foreground = sel_registerName("isEffectivelyForeground");
+    if (!a || !b || a == b || !TPEncoding(object_getClass(a), foreground, "B16@0:8") ||
+        !TPEncoding(object_getClass(b), foreground, "B16@0:8") ||
+        !((BOOL (*)(id, SEL))objc_msgSend)(a, foreground) ||
+        !((BOOL (*)(id, SEL))objc_msgSend)(b, foreground)) return NO;
+    if (first) *first = a;
+    if (second) *second = b;
+    return YES;
+}
+
+BOOL TPCopyActiveVerticalLayout(TPVerticalLayout *layout) {
+    if (!layout || !TPActiveHandles(NULL, NULL)) return NO;
+    CGRect bounds = TPMainScene().coordinateSpace.bounds;
+    TPRect rect = {bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height};
+    double step = UIScreen.mainScreen.scale == 2 ? 0.5 : 1.0;
+    return TPComputeAlignedVerticalLayout(rect, rect.y + rect.height * TPDividerRatio, 2, 151, 1, step, layout);
+}
+
+BOOL TPResizeVerticalSplit(double ratio) {
+    id first, second;
+    if (!TPDividerEnabled || !TPActiveHandles(&first, &second)) return NO;
+    return [TPVerticalResearch requestRatio:ratio primaryHandle:first secondaryHandle:second];
+}
+
+void TPStartVerticalRuntime(void) {
+    static BOOL attempted;
+    if (attempted) return;
+    attempted = YES;
+    if (!CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalSplitEnabled"), CFSTR("com.apple.springboard"), NULL)) return;
+    char build[64] = {0};
+    size_t length = sizeof(build);
+    if (sysctlbyname("kern.osversion", build, &length, NULL, 0) != 0 || strcmp(build, "20B101") != 0) {
+        NSLog(@"[TrollPadVertical] Fixed layout disabled: unverified OS build");
+        return;
+    }
+    Class calculator = objc_getClass("SBDisplayItemLayoutAttributesCalculator");
+    Class modifier = objc_getClass("SBSplitViewRootSwitcherModifier");
+    SEL sceneSelector = sel_registerName("frameForLayoutRole:inAppLayout:containerOrientation:windowScene:");
+    SEL hostSelector = sel_registerName("frameForLayoutRole:inAppLayout:withBounds:");
+    const char *sceneTypes = "{CGRect={CGPoint=dd}{CGSize=dd}}48@0:8q16@24q32@40";
+    const char *hostTypes = "{CGRect={CGPoint=dd}{CGSize=dd}}64@0:8q16@24{CGRect={CGPoint=dd}{CGSize=dd}}32";
+    if (!TPEncoding(calculator, sceneSelector, sceneTypes) || !TPEncoding(modifier, hostSelector, hostTypes)) {
+        NSLog(@"[TrollPadVertical] Fixed layout disabled: runtime ABI mismatch");
+        return;
+    }
+    // Add an own method before hooking: never replace the inherited superclass Method.
+    Method inherited = class_getInstanceMethod(modifier, hostSelector);
+    if (!class_addMethod(modifier, hostSelector, method_getImplementation(inherited), hostTypes)) {
+        NSLog(@"[TrollPadVertical] Fixed layout disabled: host already overrides method");
+        return;
+    }
+    MSHookMessageEx(calculator, sceneSelector, (IMP)TPSceneFrame, (IMP *)&TPOriginalSceneFrame);
+    MSHookMessageEx(modifier, hostSelector, (IMP)TPHostFrame, (IMP *)&TPOriginalHostFrame);
+    TPRuntimeInstalled = YES;
+    TPStartPeekPreview();
+    TPStartTransitionGeometry();
+    TPDividerEnabled = CFPreferencesGetAppBooleanValue(CFSTR("TPVerticalDividerEnabled"), CFSTR("com.apple.springboard"), NULL);
+    if (TPDividerEnabled && TPEncoding(UIWindow.class, sel_registerName("_usesWindowServerHitTesting"), "B16@0:8")) {
+        TPStartVerticalDivider();
+    } else if (TPDividerEnabled) {
+        NSLog(@"[TrollPadVertical] Divider disabled: window hit-test ABI mismatch");
+    }
+    NSLog(@"[TrollPadVertical] Experimental vertical layout installed for 20B101");
+}

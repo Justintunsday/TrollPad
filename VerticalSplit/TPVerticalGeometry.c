@@ -1,0 +1,116 @@
+#include "TPVerticalGeometry.h"
+#include <math.h>
+
+static int positive(double x) { return isfinite(x) && x > 0; }
+
+static int valid_rect(TPRect r) {
+    return isfinite(r.x) && isfinite(r.y) && positive(r.width) && positive(r.height) &&
+           isfinite(r.x + r.width) && isfinite(r.y + r.height);
+}
+
+int TPVerticalRoleAtPoint(const TPVerticalLayout *layout, double x, double y) {
+    if (!layout || !isfinite(x) || !isfinite(y) ||
+        !valid_rect(layout->upper) || !valid_rect(layout->lower) ||
+        layout->upper.x != layout->lower.x || layout->upper.width != layout->lower.width ||
+        layout->lower.y < layout->upper.y + layout->upper.height) return 0;
+    TPRect panes[] = {layout->upper, layout->lower};
+    for (int i = 0; i < 2; i++) {
+        TPRect p = panes[i];
+        if (x >= p.x && x < p.x + p.width && y >= p.y && y < p.y + p.height) return i + 1;
+    }
+    return 0;
+}
+
+int TPVerticalSnapshotFrame(TPRect pane, TPRect nativeFrame, TPRect *out) {
+    if (!out || !valid_rect(pane) || !valid_rect(nativeFrame)) return 0;
+    TPRect result = {nativeFrame.x, nativeFrame.y, nativeFrame.width,
+                     nativeFrame.width * (pane.height / pane.width)};
+    if (!valid_rect(result)) return 0;
+    *out = result;
+    return 1;
+}
+
+int TPAnchorVerticalDockPage(TPRect viewport, TPRect nativeFrame, TPRect *out) {
+    if (!out || !valid_rect(viewport) || !valid_rect(nativeFrame) ||
+        viewport.height <= viewport.width || nativeFrame.y != viewport.y ||
+        nativeFrame.width != viewport.width || nativeFrame.height != viewport.height) return 0;
+    double displacement = viewport.x - nativeFrame.x;
+    if (!isfinite(displacement) || displacement < viewport.width ||
+        displacement >= viewport.width * 2) return 0;
+    *out = nativeFrame;
+    out->x = viewport.x;
+    return 1;
+}
+
+int TPProjectVerticalPane(TPRect viewport, TPRect bounds, TPRect pane, TPRect *out) {
+    if (!out || !valid_rect(viewport) || !valid_rect(bounds) || !valid_rect(pane) ||
+        pane.x != viewport.x || pane.width != viewport.width || pane.y < viewport.y ||
+        pane.y + pane.height > viewport.y + viewport.height) return 0;
+    double offset = pane.y - viewport.y;
+    // Preserve exact half-point scene/touch edges at full size. In thumbnails
+    // use continuous projection, including the gap; rounding each frame would
+    // introduce stepping and reapplying scene minimums would reject small cards.
+    int fullSize = bounds.width == viewport.width && bounds.height == viewport.height;
+    TPRect result = {bounds.x,
+                     bounds.y + (fullSize ? offset : offset / viewport.height * bounds.height),
+                     bounds.width,
+                     fullSize ? pane.height : pane.height / viewport.height * bounds.height};
+    if (!valid_rect(result)) return 0;
+    *out = result;
+    return 1;
+}
+
+int TPLegacyRoleRequestMatches(double width, double request, int role, int orientation) {
+    if (!positive(width) || !isfinite(request) || request < 0 || orientation != 1)
+        return 0;
+    return (role == 2 && request > 0) || (role == 1 && request < width);
+}
+
+int TPComputeVerticalLayout(TPRect v, double requested, double gap, double minimum,
+                            int orientation, TPVerticalLayout *out) {
+    if (!out || orientation != 1 || !isfinite(v.x) || !isfinite(v.y) ||
+        !positive(v.width) || !positive(v.height) || !isfinite(gap) || gap < 0 ||
+        !positive(minimum) || !isfinite(v.x + v.width) ||
+        !isfinite(v.y + v.height) || gap >= v.height)
+        return 0;
+    double halfGap = gap / 2;
+    double low = fmax(v.height / 3, minimum + halfGap);
+    double high = fmin((v.height / 3) * 2, v.height - minimum - halfGap);
+    if (!isfinite(low) || !isfinite(high) || low > high) return 0;
+    double relative = isfinite(requested) ? requested - v.y : v.height / 2;
+    relative = fmax(low, fmin(relative, high));
+    double upperHeight = relative - halfGap;
+    double lowerHeight = v.height - relative - halfGap;
+    double lowerY = v.y + relative + halfGap;
+    if (!positive(upperHeight) || !positive(lowerHeight) || !isfinite(lowerY)) return 0;
+    *out = (TPVerticalLayout){
+        {v.x, v.y, v.width, upperHeight},
+        {v.x, lowerY, v.width, lowerHeight},
+        v.y + relative
+    };
+    return 1;
+}
+
+static int on_grid(double value, double step) {
+    double units = value / step;
+    return isfinite(units) && units == round(units);
+}
+
+int TPComputeAlignedVerticalLayout(TPRect v, double requested, double gap, double minimum,
+                                   int orientation, double step, TPVerticalLayout *out) {
+    TPVerticalLayout continuous, aligned;
+    if (!out || (step != 0.5 && step != 1) ||
+        !TPComputeVerticalLayout(v, requested, gap, minimum, orientation, &continuous) ||
+        !on_grid(v.x, step) || !on_grid(v.y, step) ||
+        !on_grid(v.width, step) || !on_grid(v.height, step) || !on_grid(gap / 2, step)) return 0;
+    double low = ceil((v.y + fmax(v.height / 3, minimum + gap / 2)) / step) * step;
+    double high = floor((v.y + fmin(v.height / 3 * 2, v.height - minimum - gap / 2)) / step) * step;
+    if (!isfinite(low) || !isfinite(high) || low > high) return 0;
+    double divider = round(continuous.dividerY / step) * step;
+    divider = fmax(low, fmin(divider, high));
+    if (!TPComputeVerticalLayout(v, divider, gap, minimum, orientation, &aligned) ||
+        !on_grid(aligned.upper.height, step) || !on_grid(aligned.lower.y, step) ||
+        !on_grid(aligned.lower.height, step)) return 0;
+    *out = aligned;
+    return 1;
+}
